@@ -68,7 +68,7 @@ class IEC61499Parser {
 
         if (root.querySelector("BasicFB")) {
             fb.fbType = "BasicFB";
-        } else if (root.querySelector("CompositeFB")) {
+        } else if (root.querySelector("CompositeFB") || root.querySelector("FBNetwork")) {
             fb.fbType = "CompositeFB";
         } else if (root.querySelector("SimpleFB")) {
             fb.fbType = "SimpleFB";
@@ -125,6 +125,22 @@ class IEC61499Parser {
         return fb;
     }
 
+    /**
+     * Build a type string from a VarDeclaration element, handling arrays.
+     */
+    _buildTypeString(varElement) {
+        const baseType = varElement.getAttribute("Type") || "";
+        const arraySize = varElement.getAttribute("ArraySize") || "";
+        if (!arraySize || arraySize === "0") return baseType;
+        // Plain integer → convert to 0-based sub-range
+        if (/^\d+$/.test(arraySize)) {
+            const n = parseInt(arraySize, 10);
+            return `ARRAY [0..${n - 1}] OF ${baseType}`;
+        }
+        // Already a sub-range expression or "*"
+        return `ARRAY [${arraySize}] OF ${baseType}`;
+    }
+
     _parseInterface(interfaceList, fb) {
         // Event inputs (support both standard and SubApp tags)
         const eventInputs = interfaceList.querySelector("EventInputs") || interfaceList.querySelector("SubAppEventInputs");
@@ -168,7 +184,7 @@ class IEC61499Parser {
             for (const varDecl of inputVars.querySelectorAll("VarDeclaration")) {
                 const port = new Port(
                     varDecl.getAttribute("Name") || "",
-                    varDecl.getAttribute("Type") || "",
+                    this._buildTypeString(varDecl),
                     varDecl.getAttribute("Comment") || ""
                 );
                 fb.dataInputs.push(port);
@@ -181,7 +197,7 @@ class IEC61499Parser {
             for (const varDecl of outputVars.querySelectorAll("VarDeclaration")) {
                 const port = new Port(
                     varDecl.getAttribute("Name") || "",
-                    varDecl.getAttribute("Type") || "",
+                    this._buildTypeString(varDecl),
                     varDecl.getAttribute("Comment") || ""
                 );
                 fb.dataOutputs.push(port);
@@ -339,11 +355,17 @@ class SVGRenderer {
      * @returns {number} Text width in pixels
      */
     _getPortColor(portType) {
-        if (portType === "BOOL") return this.BOOL_PORT_COLOR;
-        if (this.STRING_TYPES.has(portType)) return this.STRING_PORT_COLOR;
-        if (this.INT_TYPES.has(portType)) return this.ANY_INT_PORT_COLOR;
-        if (this.REAL_TYPES.has(portType)) return this.ANY_REAL_PORT_COLOR;
-        if (this.BIT_TYPES.has(portType)) return this.ANY_BIT_PORT_COLOR;
+        // For array types, use the element type for color mapping
+        let t = portType;
+        if (t.startsWith("ARRAY ")) {
+            const ofIdx = t.lastIndexOf(" OF ");
+            if (ofIdx >= 0) t = t.substring(ofIdx + 4);
+        }
+        if (t === "BOOL") return this.BOOL_PORT_COLOR;
+        if (this.STRING_TYPES.has(t)) return this.STRING_PORT_COLOR;
+        if (this.INT_TYPES.has(t)) return this.ANY_INT_PORT_COLOR;
+        if (this.REAL_TYPES.has(t)) return this.ANY_REAL_PORT_COLOR;
+        if (this.BIT_TYPES.has(t)) return this.ANY_BIT_PORT_COLOR;
         return this.DATA_PORT_COLOR;
     }
 

@@ -75,7 +75,7 @@ class IEC61499Parser:
 
         if root.find("BasicFB") is not None:
             fb.fb_type = "BasicFB"
-        elif root.find("CompositeFB") is not None:
+        elif root.find("CompositeFB") is not None or root.find("FBNetwork") is not None:
             fb.fb_type = "CompositeFB"
         elif root.find("SimpleFB") is not None:
             fb.fb_type = "SimpleFB"
@@ -125,6 +125,26 @@ class IEC61499Parser:
 
         return fb
 
+    @staticmethod
+    def _build_type_string(var_element: ET.Element) -> str:
+        """Build a type string from a VarDeclaration element, handling arrays.
+
+        If the element has an ArraySize attribute, formats the type as:
+          ARRAY [0..n-1] OF Type    (for a plain integer size, e.g. ArraySize="4")
+          ARRAY [*] OF Type         (for variable-length, e.g. ArraySize="*")
+          ARRAY [expr] OF Type      (for sub-range expressions, e.g. ArraySize="1..5, 0..3")
+        """
+        base_type = var_element.get("Type", "")
+        array_size = var_element.get("ArraySize", "")
+        if not array_size or array_size == "0":
+            return base_type
+        # Plain integer → convert to 0-based sub-range
+        if array_size.isdigit():
+            n = int(array_size)
+            return f"ARRAY [0..{n - 1}] OF {base_type}"
+        # Already a sub-range expression or "*"
+        return f"ARRAY [{array_size}] OF {base_type}"
+
     def _parse_interface(self, interface: ET.Element, fb: FunctionBlock):
         # Support both standard (EventInputs/Event) and SubApp (SubAppEventInputs/SubAppEvent) tags
         event_inputs = interface.find("EventInputs")
@@ -158,7 +178,7 @@ class IEC61499Parser:
             for var in input_vars.findall("VarDeclaration"):
                 port = Port(
                     name=var.get("Name", ""),
-                    port_type=var.get("Type", ""),
+                    port_type=self._build_type_string(var),
                     comment=var.get("Comment", "")
                 )
                 fb.data_inputs.append(port)
@@ -168,7 +188,7 @@ class IEC61499Parser:
             for var in output_vars.findall("VarDeclaration"):
                 port = Port(
                     name=var.get("Name", ""),
-                    port_type=var.get("Type", ""),
+                    port_type=self._build_type_string(var),
                     comment=var.get("Comment", "")
                 )
                 fb.data_outputs.append(port)
@@ -332,15 +352,22 @@ class SVGRenderer:
 
     def _get_port_color(self, port_type: str) -> str:
         """Return the fill color for a data port based on its type."""
-        if port_type == "BOOL":
+        # For array types, use the element type for color mapping
+        t = port_type
+        if t.startswith("ARRAY "):
+            # Extract element type after "OF "
+            of_idx = t.rfind(" OF ")
+            if of_idx >= 0:
+                t = t[of_idx + 4:]
+        if t == "BOOL":
             return self.BOOL_PORT_COLOR
-        elif port_type in self.STRING_TYPES:
+        elif t in self.STRING_TYPES:
             return self.STRING_PORT_COLOR
-        elif port_type in self.INT_TYPES:
+        elif t in self.INT_TYPES:
             return self.ANY_INT_PORT_COLOR
-        elif port_type in self.REAL_TYPES:
+        elif t in self.REAL_TYPES:
             return self.ANY_REAL_PORT_COLOR
-        elif port_type in self.BIT_TYPES:
+        elif t in self.BIT_TYPES:
             return self.ANY_BIT_PORT_COLOR
         else:
             return self.DATA_PORT_COLOR
