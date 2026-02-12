@@ -229,7 +229,7 @@ class SVGRenderer:
   <style>
     @font-face {
       font-family: "TGL";
-      src: local("TGL 0-17");
+      src: local("TGL 0-17"), local("TGL 0-17 alt");
       font-style: normal;
       font-weight: normal;
     }
@@ -311,7 +311,9 @@ class SVGRenderer:
         font_candidates = [
             # TGL fonts - actual fonts used in the SVG
             f"{home}/Library/Fonts/TGL 0-17.ttf",  # macOS user fonts
+            f"{home}/Library/Fonts/TGL 0-17 alt.ttf",  # macOS user fonts (alternate name)
             "/Library/Fonts/TGL 0-17.ttf",  # macOS system fonts
+            "/Library/Fonts/TGL 0-17 alt.ttf",  # macOS system fonts (alternate name)
             # Fallback system fonts (Times New Roman)
             "/Library/Fonts/Times New Roman.ttf",  # macOS
             "/System/Library/Fonts/Times.ttc",  # macOS system

@@ -250,7 +250,7 @@ class SVGRenderer {
   <style>
     @font-face {
       font-family: "TGL";
-      src: local("TGL 0-17");
+      src: local("TGL 0-17"), local("TGL 0-17 alt");
       font-style: normal;
       font-weight: normal;
     }
