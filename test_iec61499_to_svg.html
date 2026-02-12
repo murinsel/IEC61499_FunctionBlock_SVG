@@ -79,8 +79,8 @@
 
     <div class="container">
         <div class="panel input-panel">
-            <h3>XML Input (.fbt / .adp)</h3>
-            <textarea id="xmlInput" placeholder="Paste your FBT/ADP XML here..."></textarea>
+            <h3>XML Input (.fbt / .adp / .sub)</h3>
+            <textarea id="xmlInput" placeholder="Paste your FBT/ADP/SUB XML here..."></textarea>
 
             <div class="options">
                 <label><input type="checkbox" id="showComments" checked> Show Comments</label>
@@ -88,7 +88,7 @@
                 <label><input type="checkbox" id="showShadow" checked> Show Shadow</label>
             </div>
 
-            <input type="file" id="fileInput" accept=".fbt,.adp" style="display:none" onchange="loadFile(this)">
+            <input type="file" id="fileInput" accept=".fbt,.adp,.sub" style="display:none" onchange="loadFile(this)">
             <button onclick="document.getElementById('fileInput').click()">Open File...</button>
             <button onclick="convertToSvg()">Convert to SVG</button>
             <button onclick="loadExample()">Load Example</button>

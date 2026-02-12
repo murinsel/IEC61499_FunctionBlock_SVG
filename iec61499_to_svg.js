@@ -111,7 +111,13 @@ class IEC61499Parser {
             "SubApp"
         );
 
-        const interfaceList = root.querySelector("InterfaceList");
+        const versionInfo = root.querySelector("VersionInfo");
+        if (versionInfo) {
+            fb.version = versionInfo.getAttribute("Version") || "";
+        }
+
+        // SubApps can use either InterfaceList or SubAppInterfaceList
+        const interfaceList = root.querySelector("SubAppInterfaceList") || root.querySelector("InterfaceList");
         if (interfaceList) {
             this._parseInterface(interfaceList, fb);
         }
@@ -120,10 +126,12 @@ class IEC61499Parser {
     }
 
     _parseInterface(interfaceList, fb) {
-        // Event inputs
-        const eventInputs = interfaceList.querySelector("EventInputs");
+        // Event inputs (support both standard and SubApp tags)
+        const eventInputs = interfaceList.querySelector("EventInputs") || interfaceList.querySelector("SubAppEventInputs");
         if (eventInputs) {
-            for (const event of eventInputs.querySelectorAll("Event")) {
+            const events = eventInputs.querySelectorAll("Event");
+            const eventList = events.length > 0 ? events : eventInputs.querySelectorAll("SubAppEvent");
+            for (const event of eventList) {
                 const withElements = event.querySelectorAll("With");
                 const associatedVars = Array.from(withElements).map(w => w.getAttribute("Var") || "");
                 const port = new Port(
@@ -136,10 +144,12 @@ class IEC61499Parser {
             }
         }
 
-        // Event outputs
-        const eventOutputs = interfaceList.querySelector("EventOutputs");
+        // Event outputs (support both standard and SubApp tags)
+        const eventOutputs = interfaceList.querySelector("EventOutputs") || interfaceList.querySelector("SubAppEventOutputs");
         if (eventOutputs) {
-            for (const event of eventOutputs.querySelectorAll("Event")) {
+            const events = eventOutputs.querySelectorAll("Event");
+            const eventList = events.length > 0 ? events : eventOutputs.querySelectorAll("SubAppEvent");
+            for (const event of eventList) {
                 const withElements = event.querySelectorAll("With");
                 const associatedVars = Array.from(withElements).map(w => w.getAttribute("Var") || "");
                 const port = new Port(
@@ -632,6 +642,34 @@ class SVGRenderer {
           fill="#000000" text-anchor="end" dominant-baseline="middle">${port.name}</text>`;
     }
 
+    _miniFbPath(x, y, w, h) {
+        const nd = w * 0.15;      // notch depth (horizontal)
+        const nh = h / 6;         // notch height
+        const nt = y + h / 4;     // notch top y
+        const nb = nt + nh;       // notch bottom y
+        const r = 0.5;            // corner radius
+        return (
+            `M ${x + r} ${y}` +
+            ` L ${x + w - r} ${y}` +
+            ` A ${r} ${r} 0 0 1 ${x + w} ${y + r}` +
+            ` L ${x + w} ${nt}` +
+            ` L ${x + w - nd} ${nt}` +
+            ` L ${x + w - nd} ${nb}` +
+            ` L ${x + w} ${nb}` +
+            ` L ${x + w} ${y + h - r}` +
+            ` A ${r} ${r} 0 0 1 ${x + w - r} ${y + h}` +
+            ` L ${x + r} ${y + h}` +
+            ` A ${r} ${r} 0 0 1 ${x} ${y + h - r}` +
+            ` L ${x} ${nb}` +
+            ` L ${x + nd} ${nb}` +
+            ` L ${x + nd} ${nt}` +
+            ` L ${x} ${nt}` +
+            ` L ${x} ${y + r}` +
+            ` A ${r} ${r} 0 0 1 ${x + r} ${y}` +
+            ` Z`
+        );
+    }
+
     _renderNameSection(fb) {
         const centerY = this.nameSectionTop + this.NAME_SECTION_HEIGHT / 2;
 
@@ -691,14 +729,48 @@ class SVGRenderer {
 
         const textX = iconX + iconW + gapIconText;
 
+        // Icon content: text letter for most types, graphic for SubApp
+        let iconContent;
+        if (fb.fbType === "SubApp") {
+            // Draw two mini notched function blocks (same shape as the icon box)
+            // with dark blue fill, connected by a horizontal line
+            // Positioned in the lower part of the light blue icon box
+            const miniW = 5.5;
+            const miniH = 7;
+            const miniGap = 3;
+            const pairW = miniW * 2 + miniGap;
+            const pairX = iconX + (iconW - pairW) / 2;
+            const pairY = iconY + iconH - miniH - 1.5;
+
+            const leftPath = this._miniFbPath(pairX, pairY, miniW, miniH);
+            const rightPath = this._miniFbPath(pairX + miniW + miniGap, pairY, miniW, miniH);
+
+            const connX1 = pairX + miniW;
+            const connX2 = pairX + miniW + miniGap;
+            // Upper event line (green, near top of mini FBs)
+            const eventConnY = pairY + miniH * 0.12;
+            // Lower data line (red, in lower portion of mini FBs)
+            const dataConnY = pairY + miniH * 0.7;
+
+            iconContent = `
+    <path d="${leftPath}" fill="#1565C0" stroke="none"/>
+    <path d="${rightPath}" fill="#1565C0" stroke="none"/>
+    <line x1="${connX1}" y1="${eventConnY}" x2="${connX2}" y2="${eventConnY}"
+          stroke="#3DA015" stroke-width="1.2"/>
+    <line x1="${connX1}" y1="${dataConnY}" x2="${connX2}" y2="${dataConnY}"
+          stroke="#FF0000" stroke-width="1.2"/>`;
+        } else {
+            iconContent = `
+    <text x="${iconX + iconW / 2}" y="${centerY + 5}"
+          font-family="${this.FONT_FAMILY}" font-size="12" font-weight="bold"
+          fill="#000000" text-anchor="middle">${iconLetter}</text>`;
+        }
+
         return `
     <!-- Name Section -->
     <!-- FB Type Icon -->
     <path d="${iconPath}"
-          fill="#87CEEB" stroke="#1565C0" stroke-width="1"/>
-    <text x="${iconX + iconW / 2}" y="${centerY + 5}"
-          font-family="${this.FONT_FAMILY}" font-size="12" font-weight="bold"
-          fill="#000000" text-anchor="middle">${iconLetter}</text>
+          fill="#87CEEB" stroke="#1565C0" stroke-width="1"/>${iconContent}
 
     <!-- Block Name -->
     <text x="${textX}" y="${centerY + 5}"

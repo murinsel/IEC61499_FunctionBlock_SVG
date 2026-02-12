@@ -112,16 +112,26 @@ class IEC61499Parser:
             fb_type="SubApp"
         )
 
-        interface = root.find("InterfaceList")
+        version_info = root.find("VersionInfo")
+        if version_info is not None:
+            fb.version = version_info.get("Version", "")
+
+        # SubApps can use either InterfaceList or SubAppInterfaceList
+        interface = root.find("SubAppInterfaceList")
+        if interface is None:
+            interface = root.find("InterfaceList")
         if interface is not None:
             self._parse_interface(interface, fb)
 
         return fb
 
     def _parse_interface(self, interface: ET.Element, fb: FunctionBlock):
+        # Support both standard (EventInputs/Event) and SubApp (SubAppEventInputs/SubAppEvent) tags
         event_inputs = interface.find("EventInputs")
+        if event_inputs is None:
+            event_inputs = interface.find("SubAppEventInputs")
         if event_inputs is not None:
-            for event in event_inputs.findall("Event"):
+            for event in event_inputs.findall("Event") or event_inputs.findall("SubAppEvent"):
                 port = Port(
                     name=event.get("Name", ""),
                     port_type="Event",
@@ -131,8 +141,10 @@ class IEC61499Parser:
                 fb.event_inputs.append(port)
 
         event_outputs = interface.find("EventOutputs")
+        if event_outputs is None:
+            event_outputs = interface.find("SubAppEventOutputs")
         if event_outputs is not None:
-            for event in event_outputs.findall("Event"):
+            for event in event_outputs.findall("Event") or event_outputs.findall("SubAppEvent"):
                 port = Port(
                     name=event.get("Name", ""),
                     port_type="Event",
@@ -657,6 +669,35 @@ class SVGRenderer:
     <text x="{text_x}" y="{text_y}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
           fill="#000000" text-anchor="end" dominant-baseline="middle">{port.name}</text>'''
 
+    @staticmethod
+    def _mini_fb_path(x: float, y: float, w: float, h: float) -> str:
+        """Generate a notched function block path (same shape as the icon box) at given position and size."""
+        nd = w * 0.15          # notch depth (horizontal)
+        nh = h / 6             # notch height
+        nt = y + h / 4         # notch top y
+        nb = nt + nh           # notch bottom y
+        r = 0.5                # corner radius
+        return (
+            f"M {x + r} {y}"
+            f" L {x + w - r} {y}"
+            f" A {r} {r} 0 0 1 {x + w} {y + r}"
+            f" L {x + w} {nt}"
+            f" L {x + w - nd} {nt}"
+            f" L {x + w - nd} {nb}"
+            f" L {x + w} {nb}"
+            f" L {x + w} {y + h - r}"
+            f" A {r} {r} 0 0 1 {x + w - r} {y + h}"
+            f" L {x + r} {y + h}"
+            f" A {r} {r} 0 0 1 {x} {y + h - r}"
+            f" L {x} {nb}"
+            f" L {x + nd} {nb}"
+            f" L {x + nd} {nt}"
+            f" L {x} {nt}"
+            f" L {x} {y + r}"
+            f" A {r} {r} 0 0 1 {x + r} {y}"
+            f" Z"
+        )
+
     def _render_name_section(self, fb: FunctionBlock) -> str:
         """Render the name section."""
         notch = 10  # Depth of the notch
@@ -723,14 +764,48 @@ class SVGRenderer:
         # Text position (after icon)
         text_x = icon_x + icon_w + gap_icon_text
 
+        # Icon content: text letter for most types, graphic for SubApp
+        if fb.fb_type == "SubApp":
+            # Draw two mini notched function blocks (same shape as the icon box) inside it
+            # with dark blue fill, connected by a horizontal line
+            # Positioned in the lower part of the light blue icon box
+            mini_w = 5.5
+            mini_h = 7
+            gap = 3  # gap between the two mini FBs
+            # Center horizontally, position in lower portion of icon box
+            pair_w = mini_w * 2 + gap
+            pair_x = icon_x + (icon_w - pair_w) / 2
+            pair_y = icon_y + icon_h - mini_h - 1.5
+
+            left_path = self._mini_fb_path(pair_x, pair_y, mini_w, mini_h)
+            right_path = self._mini_fb_path(pair_x + mini_w + gap, pair_y, mini_w, mini_h)
+
+            # Connection lines between the two mini FBs
+            conn_x1 = pair_x + mini_w
+            conn_x2 = pair_x + mini_w + gap
+            # Upper event line (green, near top of mini FBs)
+            event_conn_y = pair_y + mini_h * 0.12
+            # Lower data line (red, in lower portion of mini FBs)
+            data_conn_y = pair_y + mini_h * 0.7
+
+            icon_content = f'''
+    <path d="{left_path}" fill="#1565C0" stroke="none"/>
+    <path d="{right_path}" fill="#1565C0" stroke="none"/>
+    <line x1="{conn_x1}" y1="{event_conn_y}" x2="{conn_x2}" y2="{event_conn_y}"
+          stroke="#3DA015" stroke-width="1.2"/>
+    <line x1="{conn_x1}" y1="{data_conn_y}" x2="{conn_x2}" y2="{data_conn_y}"
+          stroke="#FF0000" stroke-width="1.2"/>'''
+        else:
+            icon_content = f'''
+    <text x="{icon_x + icon_w / 2}" y="{center_y + 5}"
+          font-family="{self.FONT_FAMILY}" font-size="12" font-weight="bold"
+          fill="#000000" text-anchor="middle">{icon_letter}</text>'''
+
         return f'''
     <!-- Name Section -->
     <!-- FB Type Icon -->
     <path d="{icon_path}"
-          fill="#87CEEB" stroke="#1565C0" stroke-width="1"/>
-    <text x="{icon_x + icon_w / 2}" y="{center_y + 5}"
-          font-family="{self.FONT_FAMILY}" font-size="12" font-weight="bold"
-          fill="#000000" text-anchor="middle">{icon_letter}</text>
+          fill="#87CEEB" stroke="#1565C0" stroke-width="1"/>{icon_content}
 
     <!-- Block Name -->
     <text x="{text_x}" y="{center_y + 5}"
@@ -1227,6 +1302,9 @@ def convert_batch(input_dir: str, output_dir: str, recursive: bool = True,
 
     adp_pattern = "**/*.adp" if recursive else "*.adp"
     fbt_files.extend(input_path.glob(adp_pattern))
+
+    sub_pattern = "**/*.sub" if recursive else "*.sub"
+    fbt_files.extend(input_path.glob(sub_pattern))
 
     count = 0
     for fbt_file in fbt_files:
