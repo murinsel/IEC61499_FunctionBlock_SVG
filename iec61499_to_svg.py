@@ -197,9 +197,29 @@ class IEC61499Parser:
 class SVGRenderer:
     """Renders a FunctionBlock as SVG in 4diac style."""
 
-    FONT_FAMILY = "'TGL 0-17', 'Helvetica Neue', Helvetica, Arial, sans-serif"
-    FONT_FAMILY_ITALIC = "'TGL 0-16', 'Helvetica Neue', Helvetica, Arial, sans-serif"
+    FONT_FAMILY = "TGL, 'Times New Roman', Times, serif"
+    FONT_FAMILY_ITALIC = "TGL, 'Times New Roman', Times, serif"
     FONT_SIZE = 14
+
+    # @font-face declarations mapping TGL 0-17 (normal) and TGL 0-16 (italic)
+    # to a unified "TGL" family. When the local TGL fonts are installed, the
+    # browser uses them directly. When not installed, the fallback fonts in
+    # font-family take over, and font-style="italic" applies correctly to those.
+    FONT_FACE_STYLE = '''
+  <style>
+    @font-face {
+      font-family: "TGL";
+      src: local("TGL 0-17");
+      font-style: normal;
+      font-weight: normal;
+    }
+    @font-face {
+      font-family: "TGL";
+      src: local("TGL 0-16");
+      font-style: italic;
+      font-weight: normal;
+    }
+  </style>'''
 
     # Colors (from 4diac IDE plugin.xml)
     BLOCK_STROKE_COLOR = "#A0A0A0"  # Light gray for block outline
@@ -272,22 +292,23 @@ class SVGRenderer:
             # TGL fonts - actual fonts used in the SVG
             f"{home}/Library/Fonts/TGL 0-17.ttf",  # macOS user fonts
             "/Library/Fonts/TGL 0-17.ttf",  # macOS system fonts
-            # Fallback system fonts
-            "/System/Library/Fonts/Helvetica.ttc",  # macOS
-            "/System/Library/Fonts/HelveticaNeue.ttc",  # macOS
-            "/Library/Fonts/Arial.ttf",  # macOS
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux
-            "/usr/share/fonts/TTF/DejaVuSans.ttf",  # Linux
-            "C:\\Windows\\Fonts\\arial.ttf",  # Windows
+            # Fallback system fonts (Times New Roman)
+            "/Library/Fonts/Times New Roman.ttf",  # macOS
+            "/System/Library/Fonts/Times.ttc",  # macOS system
+            "/usr/share/fonts/truetype/msttcorefonts/Times_New_Roman.ttf",  # Linux
+            "/usr/share/fonts/TTF/times.ttf",  # Linux
+            "C:\\Windows\\Fonts\\times.ttf",  # Windows
         ]
 
         italic_candidates = [
             # TGL italic font
             f"{home}/Library/Fonts/TGL 0-16.ttf",  # macOS user fonts - TGL italic
             "/Library/Fonts/TGL 0-16.ttf",  # macOS system fonts
-            # Fallback system fonts
-            "/System/Library/Fonts/Helvetica.ttc",  # macOS
-            "/System/Library/Fonts/HelveticaNeue.ttc",  # macOS
+            # Fallback system fonts (Times New Roman Italic)
+            "/Library/Fonts/Times New Roman Italic.ttf",  # macOS
+            "/System/Library/Fonts/Times.ttc",  # macOS system
+            "/usr/share/fonts/truetype/msttcorefonts/Times_New_Roman_Italic.ttf",  # Linux
+            "C:\\Windows\\Fonts\\timesi.ttf",  # Windows
         ]
 
         for font_path in font_candidates:
@@ -545,7 +566,7 @@ class SVGRenderer:
         return f'''<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg"
      viewBox="0 0 {total_width} {total_height}"
-     width="{total_width}" height="{total_height}">{shadow_defs}
+     width="{total_width}" height="{total_height}">{self.FONT_FACE_STYLE}{shadow_defs}
   <g transform="translate({self.left_margin}, {top_margin})">'''
 
     def _svg_footer(self) -> str:
@@ -810,7 +831,7 @@ class SVGRenderer:
     <!-- Block Name -->
     <text x="{text_x}" y="{center_y + 5}"
           font-family="{self.FONT_FAMILY_ITALIC}" font-size="{self.FONT_SIZE}"
-          fill="#000000">{fb.name}</text>
+          fill="#000000" font-style="italic">{fb.name}</text>
     {version_text}'''
 
     def _render_data_ports(self, fb: FunctionBlock) -> str:
@@ -1018,7 +1039,7 @@ class SVGRenderer:
                     if label_parts:
                         label_parts.append(" – ")
                     # Type in italic using tspan
-                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" dominant-baseline="middle">Event</tspan>')
+                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">Event</tspan>')
                 label_text = "".join(label_parts)
                 parts.append(f'''
     <text x="{left_label_x}" y="{y}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
@@ -1031,7 +1052,7 @@ class SVGRenderer:
             if self.show_types or (self.show_comments and port.comment):
                 label_parts = []
                 if self.show_types:
-                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" dominant-baseline="middle">Event</tspan>')
+                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">Event</tspan>')
                 if self.show_comments and port.comment:
                     if label_parts:
                         label_parts.append(" – ")
@@ -1052,7 +1073,7 @@ class SVGRenderer:
                 if self.show_types:
                     if label_parts:
                         label_parts.append(" – ")
-                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" dominant-baseline="middle">{port.port_type}</tspan>')
+                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">{port.port_type}</tspan>')
                 label_text = "".join(label_parts)
                 parts.append(f'''
     <text x="{left_label_x}" y="{y}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
@@ -1065,7 +1086,7 @@ class SVGRenderer:
             if self.show_types or (self.show_comments and port.comment):
                 label_parts = []
                 if self.show_types:
-                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" dominant-baseline="middle">{port.port_type}</tspan>')
+                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">{port.port_type}</tspan>')
                 if self.show_comments and port.comment:
                     if label_parts:
                         label_parts.append(" – ")
@@ -1088,7 +1109,7 @@ class SVGRenderer:
                         label_parts.append(" – ")
                     # Use short adapter type name (last part after ::)
                     short_type = port.port_type.split("::")[-1] if "::" in port.port_type else port.port_type
-                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" dominant-baseline="middle">{short_type}</tspan>')
+                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">{short_type}</tspan>')
                 label_text = "".join(label_parts)
                 parts.append(f'''
     <text x="{left_label_x}" y="{y}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
@@ -1102,7 +1123,7 @@ class SVGRenderer:
                 label_parts = []
                 if self.show_types:
                     short_type = port.port_type.split("::")[-1] if "::" in port.port_type else port.port_type
-                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" dominant-baseline="middle">{short_type}</tspan>')
+                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">{short_type}</tspan>')
                 if self.show_comments and port.comment:
                     if label_parts:
                         label_parts.append(" – ")

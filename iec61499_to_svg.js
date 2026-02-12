@@ -224,9 +224,27 @@ class SVGRenderer {
         this.showShadow = options.showShadow !== false;
 
         // Constants
-        this.FONT_FAMILY = "'TGL 0-17', 'Helvetica Neue', Helvetica, Arial, sans-serif";
-        this.FONT_FAMILY_ITALIC = "'TGL 0-16', 'Helvetica Neue', Helvetica, Arial, sans-serif";
+        this.FONT_FAMILY = "TGL, 'Times New Roman', Times, serif";
+        this.FONT_FAMILY_ITALIC = "TGL, 'Times New Roman', Times, serif";
         this.FONT_SIZE = 14;
+
+        // @font-face declarations mapping TGL 0-17 (normal) and TGL 0-16 (italic)
+        // to a unified "TGL" family
+        this.FONT_FACE_STYLE = `
+  <style>
+    @font-face {
+      font-family: "TGL";
+      src: local("TGL 0-17");
+      font-style: normal;
+      font-weight: normal;
+    }
+    @font-face {
+      font-family: "TGL";
+      src: local("TGL 0-16");
+      font-style: italic;
+      font-weight: normal;
+    }
+  </style>`;
 
         // Canvas for text measurement
         this._measureCanvas = null;
@@ -335,7 +353,7 @@ class SVGRenderer {
         if (this._measureContext) {
             const fontStyle = italic ? 'italic ' : '';
             // Use sans-serif as fallback for measurement since TGL fonts may not be available
-            this._measureContext.font = `${fontStyle}${fontSize}px 'TGL 0-17', 'Helvetica Neue', Helvetica, Arial, sans-serif`;
+            this._measureContext.font = `${fontStyle}${fontSize}px 'TGL 0-17', 'Times New Roman', Times, serif`;
             return this._measureContext.measureText(text).width;
         }
 
@@ -536,7 +554,7 @@ class SVGRenderer {
         return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg"
      viewBox="0 0 ${totalWidth} ${totalHeight}"
-     width="${totalWidth}" height="${totalHeight}">${shadowDefs}
+     width="${totalWidth}" height="${totalHeight}">${this.FONT_FACE_STYLE}${shadowDefs}
   <g transform="translate(${this.leftMargin}, ${topMargin})">`;
     }
 
@@ -775,7 +793,7 @@ class SVGRenderer {
     <!-- Block Name -->
     <text x="${textX}" y="${centerY + 5}"
           font-family="${this.FONT_FAMILY_ITALIC}" font-size="${this.FONT_SIZE}"
-          fill="#000000">${fb.name}</text>
+          fill="#000000" font-style="italic">${fb.name}</text>
     ${versionText}`;
     }
 
@@ -1102,7 +1120,7 @@ class SVGRenderer {
                 }
                 if (this.showTypes) {
                     if (labelParts.length > 0) labelParts.push(" – ");
-                    labelParts.push(`<tspan font-family="${this.FONT_FAMILY_ITALIC}" dominant-baseline="middle">Event</tspan>`);
+                    labelParts.push(`<tspan font-family="${this.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">Event</tspan>`);
                 }
                 const labelText = labelParts.join("");
                 parts.push(`
@@ -1118,7 +1136,7 @@ class SVGRenderer {
             if (this.showTypes || (this.showComments && port.comment)) {
                 const labelParts = [];
                 if (this.showTypes) {
-                    labelParts.push(`<tspan font-family="${this.FONT_FAMILY_ITALIC}" dominant-baseline="middle">Event</tspan>`);
+                    labelParts.push(`<tspan font-family="${this.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">Event</tspan>`);
                 }
                 if (this.showComments && port.comment) {
                     if (labelParts.length > 0) labelParts.push(" – ");
@@ -1142,7 +1160,7 @@ class SVGRenderer {
                 }
                 if (this.showTypes) {
                     if (labelParts.length > 0) labelParts.push(" – ");
-                    labelParts.push(`<tspan font-family="${this.FONT_FAMILY_ITALIC}" dominant-baseline="middle">${port.portType}</tspan>`);
+                    labelParts.push(`<tspan font-family="${this.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">${port.portType}</tspan>`);
                 }
                 const labelText = labelParts.join("");
                 parts.push(`
@@ -1158,7 +1176,7 @@ class SVGRenderer {
             if (this.showTypes || (this.showComments && port.comment)) {
                 const labelParts = [];
                 if (this.showTypes) {
-                    labelParts.push(`<tspan font-family="${this.FONT_FAMILY_ITALIC}" dominant-baseline="middle">${port.portType}</tspan>`);
+                    labelParts.push(`<tspan font-family="${this.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">${port.portType}</tspan>`);
                 }
                 if (this.showComments && port.comment) {
                     if (labelParts.length > 0) labelParts.push(" – ");
@@ -1185,7 +1203,7 @@ class SVGRenderer {
                     const shortType = port.portType.includes("::")
                         ? port.portType.split("::").pop()
                         : port.portType;
-                    labelParts.push(`<tspan font-family="${this.FONT_FAMILY_ITALIC}" dominant-baseline="middle">${shortType}</tspan>`);
+                    labelParts.push(`<tspan font-family="${this.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">${shortType}</tspan>`);
                 }
                 const labelText = labelParts.join("");
                 parts.push(`
@@ -1204,7 +1222,7 @@ class SVGRenderer {
                     const shortType = port.portType.includes("::")
                         ? port.portType.split("::").pop()
                         : port.portType;
-                    labelParts.push(`<tspan font-family="${this.FONT_FAMILY_ITALIC}" dominant-baseline="middle">${shortType}</tspan>`);
+                    labelParts.push(`<tspan font-family="${this.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">${shortType}</tspan>`);
                 }
                 if (this.showComments && port.comment) {
                     if (labelParts.length > 0) labelParts.push(" – ");
