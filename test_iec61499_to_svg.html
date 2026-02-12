@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IEC 61499 to SVG Converter Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .panel {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .input-panel {
+            flex: 1;
+            min-width: 400px;
+        }
+        .output-panel {
+            flex: 2;
+            min-width: 600px;
+        }
+        textarea {
+            width: 100%;
+            height: 400px;
+            font-family: monospace;
+            font-size: 12px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 10px 5px 10px 0;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .options {
+            margin: 10px 0;
+        }
+        .options label {
+            margin-right: 15px;
+        }
+        #svgOutput {
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 10px;
+            background: white;
+            min-height: 300px;
+            overflow: auto;
+        }
+        #error {
+            color: red;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>IEC 61499 Function Block to SVG Converter</h1>
+
+    <div class="container">
+        <div class="panel input-panel">
+            <h3>XML Input (.fbt / .adp)</h3>
+            <textarea id="xmlInput" placeholder="Paste your FBT/ADP XML here..."></textarea>
+
+            <div class="options">
+                <label><input type="checkbox" id="showComments" checked> Show Comments</label>
+                <label><input type="checkbox" id="showTypes" checked> Show Types</label>
+                <label><input type="checkbox" id="showShadow" checked> Show Shadow</label>
+            </div>
+
+            <input type="file" id="fileInput" accept=".fbt,.adp" style="display:none" onchange="loadFile(this)">
+            <button onclick="document.getElementById('fileInput').click()">Open File...</button>
+            <button onclick="convertToSvg()">Convert to SVG</button>
+            <button onclick="loadExample()">Load Example</button>
+            <button onclick="downloadSvg()">Download SVG</button>
+
+            <div id="error"></div>
+        </div>
+
+        <div class="panel output-panel">
+            <h3>SVG Output</h3>
+            <div id="svgOutput"></div>
+        </div>
+    </div>
+
+    <script src="iec61499_to_svg.js"></script>
+    <script>
+        // Example FBT XML
+        const exampleXml = `<?xml version="1.0" encoding="UTF-8"?>
+<FBType Name="ExampleFB" Comment="Example Function Block">
+    <VersionInfo Version="1.0" Author="Test" Date="2024-01-01"/>
+    <InterfaceList>
+        <EventInputs>
+            <Event Name="INIT" Type="Event" Comment="Initialization">
+                <With Var="QI"/>
+            </Event>
+            <Event Name="REQ" Type="Event" Comment="Request">
+                <With Var="QI"/>
+                <With Var="DATA"/>
+            </Event>
+        </EventInputs>
+        <EventOutputs>
+            <Event Name="INITO" Type="Event" Comment="Initialization Confirm">
+                <With Var="QO"/>
+            </Event>
+            <Event Name="CNF" Type="Event" Comment="Confirmation">
+                <With Var="QO"/>
+                <With Var="RESULT"/>
+            </Event>
+        </EventOutputs>
+        <InputVars>
+            <VarDeclaration Name="QI" Type="BOOL" Comment="Qualifier Input"/>
+            <VarDeclaration Name="DATA" Type="STRING" Comment="Input Data"/>
+        </InputVars>
+        <OutputVars>
+            <VarDeclaration Name="QO" Type="BOOL" Comment="Qualifier Output"/>
+            <VarDeclaration Name="RESULT" Type="STRING" Comment="Result Data"/>
+        </OutputVars>
+    </InterfaceList>
+    <BasicFB/>
+</FBType>`;
+
+        function convertToSvg() {
+            const xmlInput = document.getElementById('xmlInput').value;
+            const errorDiv = document.getElementById('error');
+            const svgOutput = document.getElementById('svgOutput');
+
+            errorDiv.textContent = '';
+
+            if (!xmlInput.trim()) {
+                errorDiv.textContent = 'Please enter XML content';
+                return;
+            }
+
+            try {
+                const options = {
+                    showComments: document.getElementById('showComments').checked,
+                    showTypes: document.getElementById('showTypes').checked,
+                    showShadow: document.getElementById('showShadow').checked
+                };
+
+                const svg = convertFbtToSvg(xmlInput, options);
+                svgOutput.innerHTML = svg;
+            } catch (e) {
+                errorDiv.textContent = 'Error: ' + e.message;
+                console.error(e);
+            }
+        }
+
+        function loadFile(input) {
+            const file = input.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                document.getElementById('xmlInput').value = e.target.result;
+                convertToSvg();
+            };
+            reader.readAsText(file);
+            input.value = '';  // Reset so the same file can be re-selected
+        }
+
+        function loadExample() {
+            document.getElementById('xmlInput').value = exampleXml;
+            convertToSvg();
+        }
+
+        function downloadSvg() {
+            const svgOutput = document.getElementById('svgOutput');
+            const svg = svgOutput.innerHTML;
+
+            if (!svg.trim()) {
+                document.getElementById('error').textContent = 'No SVG to download. Convert first.';
+                return;
+            }
+
+            const blob = new Blob([svg], { type: 'image/svg+xml' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'function_block.svg';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // Load example on page load
+        window.onload = loadExample;
+    </script>
+</body>
+</html>

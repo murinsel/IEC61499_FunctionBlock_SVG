@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Generated SVG files (test output)
+*.svg
+!tgl/*.svg
+
+# Claude Code
+.claude/
+
+# Node.js (if used)
+node_modules/
