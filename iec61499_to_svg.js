@@ -474,7 +474,7 @@ class SVGRenderer {
             this.maxLeftLabelWidth = Math.max(this.maxLeftLabelWidth, labelWidth);
         }
         for (const port of fb.sockets) {
-            const labelWidth = this._calculateLabelWidth(port, false, true);
+            const labelWidth = this._calculateLabelWidth(port, false, true, true);
             this.maxLeftLabelWidth = Math.max(this.maxLeftLabelWidth, labelWidth);
         }
 
@@ -488,7 +488,7 @@ class SVGRenderer {
             this.maxRightLabelWidth = Math.max(this.maxRightLabelWidth, labelWidth);
         }
         for (const port of fb.plugs) {
-            const labelWidth = this._calculateLabelWidth(port, false, false);
+            const labelWidth = this._calculateLabelWidth(port, false, false, true);
             this.maxRightLabelWidth = Math.max(this.maxRightLabelWidth, labelWidth);
         }
 
@@ -520,7 +520,7 @@ class SVGRenderer {
         }
     }
 
-    _calculateLabelWidth(port, isEvent, isLeft) {
+    _calculateLabelWidth(port, isEvent, isLeft, isAdapter = false) {
         const dashWidth = this._measureText(" – ", this.FONT_SIZE, false);
 
         let labelWidth = 0;
@@ -534,9 +534,15 @@ class SVGRenderer {
             if (isEvent) {
                 labelWidth += this._measureText("Event", this.FONT_SIZE, true);
             } else {
-                const typeName = port.portType.includes("::")
-                    ? port.portType.split("::").pop()
-                    : port.portType;
+                // Only adapter ports (sockets/plugs) use the short type name after ::
+                let typeName;
+                if (isAdapter) {
+                    typeName = port.portType.includes("::")
+                        ? port.portType.split("::").pop()
+                        : port.portType;
+                } else {
+                    typeName = port.portType;
+                }
                 labelWidth += this._measureText(typeName, this.FONT_SIZE, true);
             }
         }

@@ -491,7 +491,7 @@ class SVGRenderer:
             label_width = self._calculate_label_width(port, is_event=False, is_left=True)
             self.max_left_label_width = max(self.max_left_label_width, label_width)
         for port in fb.sockets:
-            label_width = self._calculate_label_width(port, is_event=False, is_left=True)
+            label_width = self._calculate_label_width(port, is_event=False, is_left=True, is_adapter=True)
             self.max_left_label_width = max(self.max_left_label_width, label_width)
 
         # Right side labels: "Type – Comment" format
@@ -503,7 +503,7 @@ class SVGRenderer:
             label_width = self._calculate_label_width(port, is_event=False, is_left=False)
             self.max_right_label_width = max(self.max_right_label_width, label_width)
         for port in fb.plugs:
-            label_width = self._calculate_label_width(port, is_event=False, is_left=False)
+            label_width = self._calculate_label_width(port, is_event=False, is_left=False, is_adapter=True)
             self.max_right_label_width = max(self.max_right_label_width, label_width)
 
         # Calculate connector space based on number of events with associations
@@ -538,7 +538,8 @@ class SVGRenderer:
             # Default: gap (5) + connector_width (10) + label_gap (10) = 25
             self.right_connector_space = gap + cw + label_gap
 
-    def _calculate_label_width(self, port: Port, is_event: bool, is_left: bool) -> float:
+    def _calculate_label_width(self, port: Port, is_event: bool, is_left: bool,
+                               is_adapter: bool = False) -> float:
         """Calculate the width of an external label for a port."""
         dash_width = self._measure_text(" – ")
 
@@ -551,8 +552,11 @@ class SVGRenderer:
             if is_event:
                 label_width += self._measure_text("Event", italic=True)
             else:
-                # Use short adapter type name if applicable
-                type_name = port.port_type.split("::")[-1] if "::" in port.port_type else port.port_type
+                # Only adapter ports (sockets/plugs) use the short type name after ::
+                if is_adapter:
+                    type_name = port.port_type.split("::")[-1] if "::" in port.port_type else port.port_type
+                else:
+                    type_name = port.port_type
                 label_width += self._measure_text(type_name, italic=True)
 
         return label_width
