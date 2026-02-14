@@ -6,13 +6,27 @@ Available as both a **Python** script and a **JavaScript** module (browser + Nod
 
 ## Features
 
+### Single FB Converter
 - Parses `FBType`, `AdapterType`, and `SubAppType` XML elements
 - Renders event and data ports with type-specific colors matching 4diac IDE
 - Draws event-data association lines with connector squares
 - Shows external labels with comments and type information
 - Supports adapter ports (sockets and plugs)
 - Configurable: toggle comments, types, and drop shadow
+
+### Network Diagram Converter
+- Renders internal networks of composite FBs and SubApps
+- Displays FB instances with ports, connections, and routing
+- Interface sidebars for input/output boundary ports
+- Type library resolution for correct port ordering
+- Orthogonal connection routing with 45-degree beveled corners
+- U-turn routing with dx1/dx2/dy bend hints from 4diac XML
+- Optional background grid with three hierarchy levels (dotted, dashed, thick dashed)
+- Configurable block sizes and margins via INI settings file
+
+### Common
 - Uses TGL fonts for authentic technical drawing style
+- Dual Python/JavaScript implementations with identical output
 
 ## Port Colors (from 4diac IDE)
 
@@ -29,7 +43,11 @@ Available as both a **Python** script and a **JavaScript** module (browser + Nod
 
 ## Usage
 
-### Python
+### Single FB Converter
+
+Renders individual function block signatures with ports, labels, and association lines.
+
+#### Python
 
 ```bash
 # Single file
@@ -45,9 +63,7 @@ python3 iec61499_to_svg.py input.fbt --stdout
 python3 iec61499_to_svg.py input.fbt --no-comments --no-types --no-shadow
 ```
 
-Requires Python 3. Optional: `Pillow` for accurate text measurement (`pip install Pillow`).
-
-### JavaScript (Browser)
+#### JavaScript (Browser)
 
 Open `test_iec61499_to_svg.html` in a browser. You can:
 - Paste XML directly into the textarea
@@ -62,13 +78,75 @@ const svg = convertFbtToSvg(xmlString, {
 });
 ```
 
-### JavaScript (Node.js)
+#### JavaScript (Node.js)
 
 ```bash
 node iec61499_to_svg.js input.fbt -o output.svg
 ```
 
 Requires `jsdom` (`npm install jsdom`).
+
+### Network Diagram Converter
+
+Renders internal network diagrams of composite FBs and SubApps with FB instances, connections, interface sidebars, and an optional background grid.
+
+#### Python
+
+```bash
+# Single file
+python3 iec61499_network_to_svg.py input.fbt -o output.network.svg
+
+# With type library (recommended for correct port ordering)
+python3 iec61499_network_to_svg.py input.fbt -o output.svg --type-lib /path/to/type/library
+
+# With background grid
+python3 iec61499_network_to_svg.py input.fbt -o output.svg --grid
+
+# With block size settings
+python3 iec61499_network_to_svg.py input.fbt -o output.svg --settings block_size_settings.ini
+
+# Batch convert directory
+python3 iec61499_network_to_svg.py /path/to/dir --batch --type-lib /lib/path -o /output/dir
+
+# All options combined
+python3 iec61499_network_to_svg.py input.fbt -o output.svg --type-lib /lib/path --grid --settings block_size_settings.ini
+```
+
+#### JavaScript (Browser)
+
+Open `test_iec61499_network_to_svg.html` in a browser. Supports file loading, grid toggle, and settings configuration.
+
+#### JavaScript (Node.js)
+
+```bash
+node iec61499_network_to_svg.js input.fbt -o output.svg --type-lib /path/to/type/library --grid
+```
+
+Requires `jsdom` (`npm install jsdom`).
+
+### Settings File (`block_size_settings.ini`)
+
+Controls block rendering dimensions in network diagrams:
+
+```ini
+[BlockSize]
+max_value_label_size = 25
+max_type_label_size = 15
+min_pin_label_size = 0
+max_pin_label_size = 12
+min_interface_bar_size = 0
+max_interface_bar_size = 40
+max_hidden_connection_label_size = 15
+
+[BlockMargins]
+top_bottom = 0
+left_right = 0
+```
+
+### Requirements
+
+- **Python**: stdlib only (Python 3). Optional `Pillow` for accurate text measurement (`pip install Pillow`).
+- **Node.js**: Requires `jsdom` (`npm install jsdom`).
 
 ## Fonts
 
