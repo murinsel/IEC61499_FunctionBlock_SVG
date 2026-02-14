@@ -50,6 +50,21 @@ function _truncateLabel(text, maxLen) {
     return text.substring(0, maxLen) + "\u2026";
 }
 
+function _formatParameterValue(value, portType) {
+    // Ensure IEC 61131-3 typed literal notation (TYPE#value).
+    // If the value already has a type prefix, keep it; otherwise prepend portType.
+    if (!value.includes('#') && portType) {
+        value = portType + '#' + value;
+    }
+    // XML-escape for SVG
+    value = value
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    return value;
+}
+
 // ===========================================================================
 // Data Model
 // ===========================================================================
@@ -606,6 +621,13 @@ class TypeResolver {
             }
         }
 
+        // Add parameter ports that aren't already in dataInNames
+        for (const paramName of Object.keys(inst.parameters)) {
+            if (!paramName.startsWith("__") && !dataInNames.includes(paramName) && !eventInNames.includes(paramName)) {
+                dataInNames.push(paramName);
+            }
+        }
+
         inst.eventInputs = eventInNames.map(n => new Port(n, "Event"));
         inst.eventOutputs = eventOutNames.map(n => new Port(n, "Event"));
         inst.dataInputs = dataInNames.map(n => new Port(n));
@@ -620,16 +642,15 @@ class TypeResolver {
 // ===========================================================================
 
 class NetworkLayoutEngine {
-    constructor(scale = null, settings = null) {
+    constructor(settings = null) {
         this.PORT_ROW_HEIGHT = 16;
         this.BLOCK_PADDING = 10;
         this.NAME_SECTION_HEIGHT = 16;
         this.TRIANGLE_WIDTH = 5;
         this.TRIANGLE_HEIGHT = 10;
         this.FONT_SIZE = 12;
-        this.MARGIN = 60;
-        this._autoScaleNeeded = (scale === null);
-        this.SCALE = scale || 0.16;
+        this.MARGIN = 60;  // Margin around the diagram for interface ports
+        this.SCALE = 0.16;  // 4diac canvas units → SVG pixels (100 % zoom)
         this.settings = settings || new BlockSizeSettings();
 
         // Canvas for text measurement (browser only)
@@ -669,12 +690,12 @@ class NetworkLayoutEngine {
         const numPL = inst.plugs.length;
 
         const numEventRows = Math.max(numEI, numEO, 1);
-        const numDataRows = Math.max(numDI, numDO, 1);
+        const numDataRows = Math.max(numDI, numDO);
         const numAdapterRows = Math.max(numSK, numPL);
 
         const sectionPadding = this.PORT_ROW_HEIGHT / 2 - 4;
         inst.eventSectionHeight = numEventRows * this.PORT_ROW_HEIGHT + sectionPadding;
-        inst.dataSectionHeight = numDataRows * this.PORT_ROW_HEIGHT + sectionPadding;
+        inst.dataSectionHeight = numDataRows > 0 ? numDataRows * this.PORT_ROW_HEIGHT + sectionPadding : 4;
         inst.adapterSectionHeight = numAdapterRows > 0 ? numAdapterRows * this.PORT_ROW_HEIGHT : 0;
 
         inst.blockHeight = inst.eventSectionHeight + this.NAME_SECTION_HEIGHT + inst.dataSectionHeight + inst.adapterSectionHeight;
@@ -686,7 +707,7 @@ class NetworkLayoutEngine {
         const gapIconText = 4;
 
         const typeWidth = this._measureText(shortType, true);
-        const typeSectionW = notch + 3 + iconW + gapIconText + typeWidth + 5 + notch;
+        const typeSectionW = notch + 1 + iconW + gapIconText + typeWidth + 5 + notch;
 
         const triSpace = this.TRIANGLE_WIDTH + 3 + 1.5;
         const adpSpace = this.TRIANGLE_WIDTH * 2 + 3 + 1.5;
@@ -712,61 +733,14 @@ class NetworkLayoutEngine {
         const minCenterGap = 8;
         const portsWidth = maxLeft + minCenterGap + maxRight;
 
-        inst.blockWidth = Math.max(80, typeSectionW, portsWidth);
+        inst.blockWidth = Math.max(typeSectionW, portsWidth);
         inst.nameSectionTop = inst.eventSectionHeight;
         inst.nameSectionBottom = inst.eventSectionHeight + this.NAME_SECTION_HEIGHT;
         inst.adapterSectionTop = inst.nameSectionBottom + inst.dataSectionHeight;
     }
 
-    _autoScale(model) {
-        const instances = model.instances;
-        if (instances.length < 2) return this.SCALE;
-
-        const gap = 60;
-        let minScale = 0.0;
-
-        const byY = [...instances].sort((a, b) => a.y - b.y);
-        const byX = [...instances].sort((a, b) => a.x - b.x);
-
-        // Vertically adjacent pairs
-        for (let i = 0; i < byY.length; i++) {
-            for (let j = i + 1; j < byY.length; j++) {
-                const top = byY[i], bottom = byY[j];
-                const dyCanvas = bottom.y - top.y;
-                if (dyCanvas <= 0) continue;
-                const dxCanvas = Math.abs(top.x - bottom.x);
-                if (dxCanvas < dyCanvas * 3) {
-                    const neededY = top.blockHeight + gap;
-                    minScale = Math.max(minScale, neededY / dyCanvas);
-                }
-            }
-        }
-
-        // Horizontally adjacent pairs
-        for (let i = 0; i < byX.length; i++) {
-            for (let j = i + 1; j < byX.length; j++) {
-                const left = byX[i], right = byX[j];
-                const dxCanvas = right.x - left.x;
-                if (dxCanvas <= 0) continue;
-                const dyCanvas = Math.abs(left.y - right.y);
-                if (dyCanvas < dxCanvas * 3) {
-                    const neededX = left.blockWidth + gap;
-                    minScale = Math.max(minScale, neededX / dxCanvas);
-                }
-            }
-        }
-
-        // Use the default SCALE as the floor – only increase if blocks would
-        // overlap at the default scale.
-        return Math.max(minScale, this.SCALE);
-    }
-
     _positionInstances(model) {
         if (model.instances.length === 0) return;
-
-        if (this._autoScaleNeeded) {
-            this.SCALE = this._autoScale(model);
-        }
 
         const minX = Math.min(...model.instances.map(i => i.x));
         const minY = Math.min(...model.instances.map(i => i.y));
@@ -883,46 +857,66 @@ class NetworkLayoutEngine {
         const instanceMapTmp = {};
         for (const inst of model.instances) instanceMapTmp[inst.name] = inst;
 
-        // Find the maximum turn_x for all interface→FB connections
-        let maxTurnXLeft = 0;
+        // --- Input (left) sidebar positioning ---
+        // Only consider connections whose turn point falls between sidebar and dest FB.
+        let maxTurnOffset = 0;
         for (const conn of model.connections) {
             const srcParts = conn.source.split(".");
             if (srcParts.length === 1 && inputPortNames.has(srcParts[0]) && conn.dx1 !== 0) {
-                maxTurnXLeft = Math.max(maxTurnXLeft, conn.dx1 * this.SCALE);
-            }
-        }
-
-        const sidebarOffsetLeft = 58;  // fixed offset between sidebar and first turn point
-        const sidebarGapLeft = maxTurnXLeft + sidebarOffsetLeft;
-
-        const inputSidebarRight = instMinX - sidebarGapLeft;
-
-        // Output sidebar: find max turn_x across ALL FB→interface connections
-        let maxRightTurnX = instMaxX;  // fallback
-        for (const conn of model.connections) {
-            const srcParts = conn.source.split(".");
-            const dstParts = conn.destination.split(".");
-            if (dstParts.length === 1 && outputPortNames.has(dstParts[0]) && conn.dx1 !== 0) {
-                if (srcParts.length === 2) {
-                    const fbInst = instanceMapTmp[srcParts[0]];
-                    if (fbInst) {
-                        const portName = srcParts[1];
-                        if (fbInst.portPositions && fbInst.portPositions[portName]) {
-                            const srcX = fbInst.portPositions[portName][0];
-                            const turnX = srcX + conn.dx1 * this.SCALE;
-                            maxRightTurnX = Math.max(maxRightTurnX, turnX);
+                const dx1Px = conn.dx1 * this.SCALE;
+                const dstParts = conn.destination.split(".");
+                if (dstParts.length === 2) {
+                    const dstInst = instanceMapTmp[dstParts[0]];
+                    if (dstInst) {
+                        const distToDest = dstInst.renderX - instMinX;
+                        if (dx1Px <= distToDest * 0.5) {
+                            maxTurnOffset = Math.max(maxTurnOffset, dx1Px);
                         }
                     }
                 }
             }
         }
+        const sidebarPaddingLeft = 58;
+        const sidebarGapLeft = maxTurnOffset + sidebarPaddingLeft;
+        const inputSidebarRight = instMinX - sidebarGapLeft;
         const inputSidebarLeft = inputSidebarRight - inputSidebarW;
-        const sidebarOffsetRight = 58;  // fixed offset between last turn point and sidebar
-        const outputSidebarLeft = maxRightTurnX + sidebarOffsetRight;
 
-        const sidebarTop = instMinY - 38;
+        // --- Output (right) sidebar positioning ---
+        // Mirror of left-side logic: find max turn-point offset rightward from
+        // inst_max_x, filtering out connections that route far back into the network.
+        let maxRightTurnOffset = 0;
+        for (const conn of model.connections) {
+            const dstParts = conn.destination.split(".");
+            if (dstParts.length === 1 && outputPortNames.has(dstParts[0]) && conn.dx1 !== 0) {
+                const srcParts = conn.source.split(".");
+                if (srcParts.length === 2) {
+                    const srcInst = instanceMapTmp[srcParts[0]];
+                    if (srcInst) {
+                        const portName = srcParts[1];
+                        if (srcInst.portPositions && srcInst.portPositions[portName]) {
+                            const srcX = srcInst.portPositions[portName][0];
+                            const dx1Px = conn.dx1 * this.SCALE;
+                            const turnX = srcX + dx1Px;
+                            const offsetFromRight = turnX - instMaxX;
+                            if (offsetFromRight > 0) {
+                                const srcRight = srcInst.renderX + srcInst.blockWidth;
+                                const distSrcToLeft = srcRight - instMinX;
+                                if (dx1Px <= distSrcToLeft * 0.5) {
+                                    maxRightTurnOffset = Math.max(maxRightTurnOffset, offsetFromRight);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        const sidebarPaddingRight = 20;
+        const sidebarGapRight = maxRightTurnOffset + sidebarPaddingRight;
+        const outputSidebarLeft = instMaxX + sidebarGapRight;
+
         const sidebarRowH = 17; // spacing for sidebar port names
         const topPad = sidebarRowH * 1.0; // space above first port
+        let sidebarTop = instMinY - 58;
 
         let inputSidebarH = inputs.length ? (inputs.length * sidebarRowH + topPad) : 0;
         let outputSidebarH = outputs.length ? (outputs.length * sidebarRowH + topPad) : 0;
@@ -979,7 +973,7 @@ class NetworkLayoutEngine {
         const contentTop = Math.min(...allY);
         const contentBottom = Math.max(...allY);
 
-        const borderPadV = 20; // vertical padding (top/bottom)
+        const borderPadV = 40; // vertical padding (top/bottom)
 
         // Sidebars form the left/right edges of the border — no extra padding
         const borderX = contentLeft;
@@ -1008,6 +1002,19 @@ class NetworkLayoutEngine {
             model.outputSidebarRect.y = headerBottom;
             model.outputSidebarRect.h = sidebarBottom - headerBottom;
         }
+
+        // Reposition interface port labels relative to header_bottom so they
+        // stay near the top of the sidebar regardless of border_pad_v.
+        const sidebarRowH2 = 17;
+        const labelTopPad = 37; // gap from header separator to first label
+        const inputs2 = model.interfacePorts.filter(p => p.direction === 'input');
+        const outputs2 = model.interfacePorts.filter(p => p.direction === 'output');
+        inputs2.forEach((port, i) => {
+            port.renderY = headerBottom + labelTopPad + i * sidebarRowH2;
+        });
+        outputs2.forEach((port, i) => {
+            port.renderY = headerBottom + labelTopPad + i * sidebarRowH2;
+        });
     }
 
     getDiagramBounds(model) {
@@ -1053,8 +1060,8 @@ class NetworkLayoutEngine {
 // ===========================================================================
 
 class ConnectionRouter {
-    constructor(scale = 0.05) {
-        this.SCALE = scale;
+    constructor() {
+        this.SCALE = 0.16;  // Must match layout engine scale
     }
 
     route(conn, model, instanceMap, interfaceMap) {
@@ -1260,23 +1267,42 @@ class NetworkSVGRenderer {
         return this.DATA_PORT_COLOR;
     }
 
-    _getConnectionColor(conn, model, instanceMap) {
-        if (conn.connType === "event") return this.EVENT_PORT_COLOR;
-        if (conn.connType === "adapter") return this.ADAPTER_PORT_COLOR;
-
-        const parts = conn.source.split(".");
+    _resolvePortType(endpoint, model, instanceMap) {
+        const parts = endpoint.split(".");
         if (parts.length === 2) {
             const inst = instanceMap[parts[0]];
             if (inst) {
                 for (const p of [...inst.dataOutputs, ...inst.dataInputs]) {
-                    if (p.name === parts[1]) return this._getPortColor(p.portType);
+                    if (p.name === parts[1]) return p.portType;
                 }
             }
         } else if (parts.length === 1) {
             for (const ip of model.interfacePorts) {
-                if (ip.name === parts[0]) return this._getPortColor(ip.portType);
+                if (ip.name === parts[0]) return ip.portType;
             }
         }
+        return "";
+    }
+
+    _getConnectionColor(conn, model, instanceMap) {
+        if (conn.connType === "event") return this.EVENT_PORT_COLOR;
+        if (conn.connType === "adapter") return this.ADAPTER_PORT_COLOR;
+
+        const ANY_TYPES = new Set(["ANY", "ANY_ELEMENTARY", "ANY_MAGNITUDE",
+            "ANY_NUM", "ANY_REAL", "ANY_INT", "ANY_BIT", "ANY_STRING",
+            "ANY_CHARS", "ANY_DATE", "ANY_DURATION", "ANY_STRUCT"]);
+
+        const srcType = this._resolvePortType(conn.source, model, instanceMap);
+        if (srcType && !ANY_TYPES.has(srcType)) {
+            return this._getPortColor(srcType);
+        }
+        // Source is generic/unknown — try destination type
+        const dstType = this._resolvePortType(conn.destination, model, instanceMap);
+        if (dstType && !ANY_TYPES.has(dstType)) {
+            return this._getPortColor(dstType);
+        }
+        // Both generic — use source color if available, else fallback
+        if (srcType) return this._getPortColor(srcType);
         return this.DATA_PORT_COLOR;
     }
 
@@ -1382,20 +1408,20 @@ class NetworkSVGRenderer {
                 // Horizontal lines (y positions) — offset by _hOff
                 const gridIdxH = ((i - _hOff) % 10 + 10) % 10;
                 if (gridIdxH === 0) {
-                    parts.push(`      <line x1="0" y1="${pos}" x2="${_gridSuper.toFixed(2)}" y2="${pos}" stroke="#909090" stroke-width="1.5" stroke-dasharray="6,3"/>`);
+                    parts.push(`      <line x1="0" y1="${pos}" x2="${_gridSuper.toFixed(2)}" y2="${pos}" stroke="#C0C0C0" stroke-width="1.5" stroke-dasharray="6,3"/>`);
                 } else if (gridIdxH === 5) {
-                    parts.push(`      <line x1="0" y1="${pos}" x2="${_gridSuper.toFixed(2)}" y2="${pos}" stroke="#A0A0A0" stroke-width="1" stroke-dasharray="4,3"/>`);
+                    parts.push(`      <line x1="0" y1="${pos}" x2="${_gridSuper.toFixed(2)}" y2="${pos}" stroke="#C0C0C0" stroke-width="1" stroke-dasharray="4,3"/>`);
                 } else {
-                    parts.push(`      <line x1="0" y1="${pos}" x2="${_gridSuper.toFixed(2)}" y2="${pos}" stroke="#B8B8B8" stroke-width="0.5" stroke-dasharray="1,3"/>`);
+                    parts.push(`      <line x1="0" y1="${pos}" x2="${_gridSuper.toFixed(2)}" y2="${pos}" stroke="#C0C0C0" stroke-width="0.5" stroke-dasharray="1,3"/>`);
                 }
                 // Vertical lines (x positions) — offset by _vOff
                 const gridIdxV = ((i - _vOff) % 10 + 10) % 10;
                 if (gridIdxV === 0) {
-                    parts.push(`      <line x1="${pos}" y1="0" x2="${pos}" y2="${_gridSuper.toFixed(2)}" stroke="#909090" stroke-width="1.5" stroke-dasharray="6,3"/>`);
+                    parts.push(`      <line x1="${pos}" y1="0" x2="${pos}" y2="${_gridSuper.toFixed(2)}" stroke="#C0C0C0" stroke-width="1.5" stroke-dasharray="6,3"/>`);
                 } else if (gridIdxV === 5) {
-                    parts.push(`      <line x1="${pos}" y1="0" x2="${pos}" y2="${_gridSuper.toFixed(2)}" stroke="#A0A0A0" stroke-width="1" stroke-dasharray="4,3"/>`);
+                    parts.push(`      <line x1="${pos}" y1="0" x2="${pos}" y2="${_gridSuper.toFixed(2)}" stroke="#C0C0C0" stroke-width="1" stroke-dasharray="4,3"/>`);
                 } else {
-                    parts.push(`      <line x1="${pos}" y1="0" x2="${pos}" y2="${_gridSuper.toFixed(2)}" stroke="#B8B8B8" stroke-width="0.5" stroke-dasharray="1,3"/>`);
+                    parts.push(`      <line x1="${pos}" y1="0" x2="${pos}" y2="${_gridSuper.toFixed(2)}" stroke="#C0C0C0" stroke-width="0.5" stroke-dasharray="1,3"/>`);
                 }
             }
             parts.push(`    </pattern>`);
@@ -1419,7 +1445,7 @@ class NetworkSVGRenderer {
         }
 
         // Connections
-        const router = new ConnectionRouter(layout.SCALE);
+        const router = new ConnectionRouter();
         parts.push('  <g id="connections">');
         for (const conn of model.connections) {
             const waypoints = router.route(conn, model, instanceMap, interfaceMap);
@@ -1480,6 +1506,7 @@ class NetworkSVGRenderer {
         parts.push(this._renderNameSection(inst));
         parts.push(this._renderEventPorts(inst));
         parts.push(this._renderDataPorts(inst));
+        parts.push(this._renderParameterLabels(inst));
         parts.push(this._renderAdapterPorts(inst));
         parts.push(this._renderInstanceLabel(inst));
         parts.push('    </g>');
@@ -1627,6 +1654,50 @@ class NetworkSVGRenderer {
         for (const p of inst.dataOutputs) {
             parts.push(this._renderPortRight(p, y, inst.blockWidth, this._getPortColor(p.portType)));
             y += this.PORT_ROW_HEIGHT;
+        }
+
+        return parts.join("\n");
+    }
+
+    _renderParameterLabels(inst) {
+        if (!inst.parameters || Object.keys(inst.parameters).length === 0) return "";
+
+        const parts = [];
+        const topPadding = this.PORT_ROW_HEIGHT / 2 - 4;
+
+        // Build port name → local y lookup for all input ports
+        const portYMap = {};
+        // Event inputs
+        let y = this.PORT_ROW_HEIGHT / 2 + topPadding;
+        for (const p of inst.eventInputs) {
+            portYMap[p.name] = y;
+            y += this.PORT_ROW_HEIGHT;
+        }
+        // Data inputs
+        y = inst.nameSectionBottom + this.PORT_ROW_HEIGHT / 2;
+        for (const p of inst.dataInputs) {
+            portYMap[p.name] = y;
+            y += this.PORT_ROW_HEIGHT;
+        }
+
+        // Build port name → type lookup
+        const portTypeMap = {};
+        for (const p of inst.eventInputs) portTypeMap[p.name] = "Event";
+        for (const p of inst.dataInputs) portTypeMap[p.name] = p.portType;
+
+        for (const [paramName, paramValue] of Object.entries(inst.parameters)) {
+            if (paramName.startsWith("__")) continue;
+            if (!(paramName in portYMap)) continue;
+            const py = portYMap[paramName];
+            const portType = portTypeMap[paramName] || "";
+            let displayValue = _formatParameterValue(paramValue, portType);
+            displayValue = _truncateLabel(displayValue, this.settings.maxValueLabelSize);
+            const textX = -3;
+            const textY = py + this.FONT_SIZE * 0.35;
+            parts.push(
+                `      <text x="${textX}" y="${textY.toFixed(1)}"` +
+                ` font-family="${this.FONT_FAMILY}" font-size="${this.FONT_SIZE}"` +
+                ` fill="#000000" text-anchor="end">${displayValue}</text>`);
         }
 
         return parts.join("\n");
@@ -1792,7 +1863,6 @@ class NetworkSVGRenderer {
  * @param {string} xmlString - The XML content
  * @param {Object} options - Rendering options
  * @param {boolean} options.showShadow - Show drop shadow (default: true)
- * @param {number} options.scale - Coordinate scale factor (default: 0.05)
  * @param {Object} options.typeLibXmls - Map of type name → XML string for type resolution
  * @returns {string} SVG content
  */
@@ -1805,7 +1875,7 @@ function convertNetworkToSvg(xmlString, options = {}) {
     const resolver = new TypeResolver(options.typeLibXmls || {});
     resolver.resolve(model);
 
-    const layout = new NetworkLayoutEngine(options.scale || null, settings);
+    const layout = new NetworkLayoutEngine(settings);
     layout.layout(model);
 
     const renderer = new NetworkSVGRenderer({ ...options, settings });
@@ -1836,16 +1906,15 @@ if (typeof module !== 'undefined' && module.exports) {
 
         const inputFile = args[0];
         let outputFile = null;
-        let typeLibPath = null;
+        let typeLibPaths = [];
         let settingsPath = null;
         const options = { showShadow: true };
 
         for (let i = 1; i < args.length; i++) {
             if (args[i] === '-o' && args[i + 1]) outputFile = args[++i];
-            else if (args[i] === '--type-lib' && args[i + 1]) typeLibPath = args[++i];
+            else if (args[i] === '--type-lib' && args[i + 1]) typeLibPaths.push(args[++i]);
             else if (args[i] === '--no-shadow') options.showShadow = false;
             else if (args[i] === '--grid') options.showGrid = true;
-            else if (args[i] === '--scale' && args[i + 1]) options.scale = parseFloat(args[++i]);
             else if (args[i] === '--settings' && args[i + 1]) settingsPath = args[++i];
         }
 
@@ -1870,12 +1939,12 @@ if (typeof module !== 'undefined' && module.exports) {
 
             // Build type library from filesystem
             const typeLibXmls = {};
-            if (typeLibPath) {
-                const walkDir = (dir) => {
+            for (const tlPath of typeLibPaths) {
+                const walkDir = (dir, rootPath) => {
                     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
                         const fullPath = path.join(dir, entry.name);
                         if (entry.isDirectory()) {
-                            walkDir(fullPath);
+                            walkDir(fullPath, rootPath);
                         } else if (/\.(fbt|sub|adp)$/i.test(entry.name)) {
                             try {
                                 const content = fs.readFileSync(fullPath, 'utf-8');
@@ -1883,7 +1952,7 @@ if (typeof module !== 'undefined' && module.exports) {
                                 typeLibXmls[name] = content;
 
                                 // Also index by relative path with :: separators
-                                const rel = path.relative(typeLibPath, fullPath);
+                                const rel = path.relative(rootPath, fullPath);
                                 const parts = rel.split(path.sep);
                                 parts[parts.length - 1] = name;
                                 const qualified = parts.join("::");
@@ -1892,12 +1961,12 @@ if (typeof module !== 'undefined' && module.exports) {
                         }
                     }
                 };
-                if (fs.existsSync(typeLibPath)) walkDir(typeLibPath);
+                if (fs.existsSync(tlPath)) walkDir(tlPath, tlPath);
             }
 
             // Also add the input file's directory
             const inputDir = path.dirname(inputFile);
-            if (inputDir !== typeLibPath) {
+            if (!typeLibPaths.includes(inputDir)) {
                 for (const entry of fs.readdirSync(inputDir, { withFileTypes: true })) {
                     if (/\.(fbt|sub|adp)$/i.test(entry.name)) {
                         try {

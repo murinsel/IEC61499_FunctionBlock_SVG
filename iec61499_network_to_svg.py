@@ -84,6 +84,26 @@ def _truncate_label(text: str, max_len: int) -> str:
     return text[:max_len] + "…"
 
 
+def _format_parameter_value(value: str, port_type: str = "") -> str:
+    """Format an IEC 61131-3 typed literal for display.
+
+    Ensures the value has a type prefix in IEC 61131-3 notation (TYPE#value).
+    If the value already contains a type prefix it is kept as-is.
+    Otherwise the port_type is prepended.
+    Examples: WSTRING#"OK" → WSTRING#"OK", TRUE → BOOL#TRUE, '/' → STRING#'/'
+    """
+    # If value already has a type prefix, keep it
+    if '#' not in value and port_type:
+        value = f"{port_type}#{value}"
+    # XML-escape for SVG
+    value = (value
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;"))
+    return value
+
+
 # ===========================================================================
 # Data Model
 # ===========================================================================
@@ -691,6 +711,11 @@ class TypeResolver:
                     if port_name not in data_in_names:
                         data_in_names.append(port_name)
 
+        # Add parameter ports that aren't already in data_in_names
+        for param_name in inst.parameters:
+            if not param_name.startswith("__") and param_name not in data_in_names and param_name not in event_in_names:
+                data_in_names.append(param_name)
+
         inst.event_inputs = [Port(name=n, port_type="Event") for n in event_in_names]
         inst.event_outputs = [Port(name=n, port_type="Event") for n in event_out_names]
         inst.data_inputs = [Port(name=n) for n in data_in_names]
@@ -716,12 +741,9 @@ class NetworkLayoutEngine:
     TRIANGLE_HEIGHT = 10
     FONT_SIZE = 12
     MARGIN = 60           # Margin around the diagram for interface ports
-    SCALE = 0.16          # Default: 4diac canvas units → SVG pixels (100 % zoom)
+    SCALE = 0.16          # 4diac canvas units → SVG pixels (100 % zoom)
 
-    def __init__(self, scale: float = None, settings: BlockSizeSettings = None):
-        self._auto_scale_needed = (scale is None)
-        if scale is not None:
-            self.SCALE = scale
+    def __init__(self, settings: BlockSizeSettings = None):
         self.settings = settings or BlockSizeSettings()
         self._font = None
         self._font_italic = None
@@ -803,12 +825,12 @@ class NetworkLayoutEngine:
         num_plugs = len(inst.plugs)
 
         num_event_rows = max(num_event_inputs, num_event_outputs, 1)
-        num_data_rows = max(num_data_inputs, num_data_outputs, 1)
+        num_data_rows = max(num_data_inputs, num_data_outputs)
         num_adapter_rows = max(num_sockets, num_plugs)
 
         section_padding = self.PORT_ROW_HEIGHT / 2 - 4
         inst.event_section_height = num_event_rows * self.PORT_ROW_HEIGHT + section_padding
-        inst.data_section_height = num_data_rows * self.PORT_ROW_HEIGHT + section_padding
+        inst.data_section_height = (num_data_rows * self.PORT_ROW_HEIGHT + section_padding) if num_data_rows > 0 else 4
         inst.adapter_section_height = num_adapter_rows * self.PORT_ROW_HEIGHT if num_adapter_rows > 0 else 0
 
         inst.block_height = (inst.event_section_height +
@@ -825,7 +847,7 @@ class NetworkLayoutEngine:
         icon_w = 14
         gap_icon_text = 4
         type_width = self._measure_text(short_type, italic=True)
-        name_section_width = notch + 3 + icon_w + gap_icon_text + type_width + 5 + notch
+        name_section_width = notch + 1 + icon_w + gap_icon_text + type_width + 5 + notch
 
         triangle_space = self.TRIANGLE_WIDTH + 3 + 1.5
         adapter_space = self.TRIANGLE_WIDTH * 2 + 3 + 1.5
@@ -852,83 +874,16 @@ class NetworkLayoutEngine:
         min_center_gap = 8
         ports_width = max_left + min_center_gap + max_right
 
-        inst.block_width = max(80, name_section_width, ports_width)
+        inst.block_width = max(name_section_width, ports_width)
 
         inst.name_section_top = inst.event_section_height
         inst.name_section_bottom = inst.event_section_height + self.NAME_SECTION_HEIGHT
         inst.adapter_section_top = inst.name_section_bottom + inst.data_section_height
 
-    def _auto_scale(self, model: NetworkModel) -> float:
-        """Compute a scale factor that prevents block overlap.
-
-        For each pair of instances that could potentially overlap,
-        ensure the scaled coordinate gap is large enough to fit
-        the source block (with some padding).
-        Only constrains pairs where blocks are close enough in
-        the perpendicular axis that overlap is possible.
-        """
-        instances = model.instances
-        if len(instances) < 2:
-            return self.SCALE
-
-        gap = 60  # minimum gap between blocks in SVG pixels
-
-        # Sort by x and y separately to find truly adjacent blocks
-        by_x = sorted(instances, key=lambda i: i.x)
-        by_y = sorted(instances, key=lambda i: i.y)
-
-        min_scale = 0.0
-
-        # Check vertically adjacent pairs (sorted by y, looking at close x ranges)
-        for i in range(len(by_y)):
-            for j in range(i + 1, len(by_y)):
-                top, bottom = by_y[i], by_y[j]
-                dy_canvas = bottom.y - top.y
-                if dy_canvas <= 0:
-                    continue
-                # Only constrain if they overlap horizontally at any reasonable scale
-                # Two blocks overlap in x if their x-ranges intersect.
-                # At scale s: block_a x-range = [a.x*s, a.x*s + a.width]
-                # We check if blocks have similar x coordinates
-                dx_canvas = abs(top.x - bottom.x)
-                max_width = max(top.block_width, bottom.block_width)
-                # If dx at current candidate scale would place them overlapping:
-                # They could overlap if dx_canvas * scale < max_width
-                # This means scale > max_width / dx_canvas would separate them,
-                # but we also need dy_canvas * scale > top.block_height + gap
-                # Conservative: only constrain if dx_canvas is small relative to dy_canvas
-                if dx_canvas < dy_canvas * 3:  # they're roughly stacked
-                    needed_y = top.block_height + gap
-                    scale_y = needed_y / dy_canvas
-                    min_scale = max(min_scale, scale_y)
-
-        # Check horizontally adjacent pairs (sorted by x, looking at close y ranges)
-        for i in range(len(by_x)):
-            for j in range(i + 1, len(by_x)):
-                left, right = by_x[i], by_x[j]
-                dx_canvas = right.x - left.x
-                if dx_canvas <= 0:
-                    continue
-                dy_canvas = abs(left.y - right.y)
-                max_height = max(left.block_height, right.block_height)
-                if dy_canvas < dx_canvas * 3:  # they're roughly side by side
-                    needed_x = left.block_width + gap
-                    scale_x = needed_x / dx_canvas
-                    min_scale = max(min_scale, scale_x)
-
-        # Use the default SCALE as the floor – only increase if blocks would
-        # overlap at the default scale.  This keeps the layout consistent with
-        # the 4diac IDE rendering scale (0.16 px / canvas-unit at 100 % zoom).
-        return max(min_scale, self.SCALE)
-
     def _position_instances(self, model: NetworkModel):
         """Map XML canvas coordinates to SVG render positions."""
         if not model.instances:
             return
-
-        # Auto-detect scale if not explicitly set
-        if self._auto_scale_needed:
-            self.SCALE = self._auto_scale(model)
 
         # Find coordinate bounds
         min_x = min(inst.x for inst in model.instances)
@@ -1073,46 +1028,72 @@ class NetworkLayoutEngine:
         instance_map_tmp = {inst.name: inst for inst in model.instances}
 
         # --- Input (left) sidebar positioning ---
-        # Find the maximum turn_x for all interface→FB connections
-        max_turn_x_left = 0.0
+        # The sidebar must be left of all connection turn points that run between
+        # it and the leftmost blocks.  For each interface→FB connection, the turn
+        # point is at sidebar_right + dx1 * SCALE.  We only consider connections
+        # whose turn point would actually fall left of the destination FB (i.e.
+        # dx1 * SCALE < dest_render_x - sidebar_right).  Since we don't know
+        # sidebar_right yet, we filter by dx1 * SCALE < dest_render_x - inst_min_x
+        # (turn point is left of the dest FB relative to the network left edge).
+        # Only consider turn points that fall between the sidebar and the
+        # destination FB.  The turn point is at sidebar_right + dx1_px; it must
+        # be left of the destination FB: dx1_px < dest_render_x - sidebar_right.
+        # Since sidebar_right ≈ inst_min_x - gap, we approximate the filter as:
+        # the turn point should be closer to the sidebar than to the dest FB,
+        # i.e. dx1_px < half the distance from inst_min_x to dest FB.
+        max_turn_offset = 0.0
         for conn in model.connections:
             src_parts = conn.source.split(".")
-            dst_parts = conn.destination.split(".")
             if len(src_parts) == 1 and src_parts[0] in input_port_names and conn.dx1 != 0:
-                # turn_x is relative to sidebar_right, so the gap must be at least dx1*SCALE
-                max_turn_x_left = max(max_turn_x_left, conn.dx1 * self.SCALE)
+                dx1_px = conn.dx1 * self.SCALE
+                dst_parts = conn.destination.split(".")
+                if len(dst_parts) == 2:
+                    dst_inst = instance_map_tmp.get(dst_parts[0])
+                    if dst_inst:
+                        dist_to_dest = dst_inst.render_x - inst_min_x
+                        if dx1_px <= dist_to_dest * 0.5:
+                            max_turn_offset = max(max_turn_offset, dx1_px)
 
-        sidebar_offset_left = 58  # fixed offset between sidebar and first turn point
-        sidebar_gap_left = max_turn_x_left + sidebar_offset_left
-
+        sidebar_padding_left = 58
+        sidebar_gap_left = max_turn_offset + sidebar_padding_left
         input_sidebar_right = inst_min_x - sidebar_gap_left
         input_sidebar_left = input_sidebar_right - input_sidebar_w
 
         # --- Output (right) sidebar positioning ---
-        # Find the maximum turn_x across ALL FB → output-interface connections.
-        max_right_turn_x = inst_max_x  # fallback
+        # Mirror of the left-side logic: find the maximum turn-point offset
+        # (measured rightward from inst_max_x) for FB→interface connections.
+        # Only consider turn points whose dx1 offset is less than half the
+        # distance from the source FB's right edge to the network's left edge
+        # (filtering out connections that route far back into the network).
+        max_right_turn_offset = 0.0
         for conn in model.connections:
-            src_parts = conn.source.split(".")
             dst_parts = conn.destination.split(".")
             if len(dst_parts) == 1 and dst_parts[0] in output_port_names and conn.dx1 != 0:
+                src_parts = conn.source.split(".")
                 if len(src_parts) == 2:
-                    fb_inst = instance_map_tmp.get(src_parts[0])
-                    if fb_inst:
+                    src_inst = instance_map_tmp.get(src_parts[0])
+                    if src_inst:
                         port_name = src_parts[1]
-                        if port_name in fb_inst.port_positions:
-                            src_x = fb_inst.port_positions[port_name][0]
-                            turn_x = src_x + conn.dx1 * self.SCALE
-                            max_right_turn_x = max(max_right_turn_x, turn_x)
+                        if port_name in src_inst.port_positions:
+                            src_x = src_inst.port_positions[port_name][0]
+                            dx1_px = conn.dx1 * self.SCALE
+                            turn_x = src_x + dx1_px
+                            offset_from_right = turn_x - inst_max_x
+                            if offset_from_right > 0:
+                                src_right = src_inst.render_x + src_inst.block_width
+                                dist_src_to_left = src_right - inst_min_x
+                                if dx1_px <= dist_src_to_left * 0.5:
+                                    max_right_turn_offset = max(max_right_turn_offset, offset_from_right)
 
-        sidebar_offset_right = 58  # fixed offset between last turn point and sidebar
-        output_sidebar_left = max_right_turn_x + sidebar_offset_right
+        sidebar_padding_right = 20
+        sidebar_gap_right = max_right_turn_offset + sidebar_padding_right
+        output_sidebar_left = inst_max_x + sidebar_gap_right
         output_sidebar_right = output_sidebar_left + output_sidebar_w
 
-        # Sidebar vertical extent: starts at top of instance area,
-        # height determined by number of ports (line spacing)
-        sidebar_top = inst_min_y - 38
+        # Sidebar vertical extent: starts above the topmost instance area
         sidebar_row_h = 17  # spacing for sidebar port names
         top_pad = sidebar_row_h * 1.0  # space above first port
+        sidebar_top = inst_min_y - 58
 
         input_sidebar_h = (len(inputs) * sidebar_row_h + top_pad) if inputs else 0
         output_sidebar_h = (len(outputs) * sidebar_row_h + top_pad) if outputs else 0
@@ -1174,7 +1155,7 @@ class NetworkLayoutEngine:
         content_top = min(all_y)
         content_bottom = max(all_y)
 
-        border_pad_v = 20  # vertical padding (top/bottom)
+        border_pad_v = 40  # vertical padding (top/bottom)
 
         # Outer border rectangle — sidebars form the left/right edges
         border_x = content_left
@@ -1203,6 +1184,18 @@ class NetworkLayoutEngine:
         if model.output_sidebar_rect:
             sx, sy, sw, sh = model.output_sidebar_rect
             model.output_sidebar_rect = (sx, header_bottom, sw, sidebar_bottom - header_bottom)
+
+        # Reposition interface port labels relative to header_bottom so they
+        # stay near the top of the sidebar regardless of border_pad_v.
+        sidebar_row_h = 17
+        label_top_pad = 37  # gap from header separator to first label
+        inputs = [p for p in model.interface_ports if p.direction == "input"]
+        outputs = [p for p in model.interface_ports if p.direction == "output"]
+        for i, port in enumerate(inputs):
+            port.render_y = header_bottom + label_top_pad + i * sidebar_row_h
+        for i, port in enumerate(outputs):
+            port.render_y = header_bottom + label_top_pad + i * sidebar_row_h
+
 
     def get_diagram_bounds(self, model: NetworkModel) -> Tuple[float, float, float, float]:
         """Get the bounding box of the entire diagram (min_x, min_y, max_x, max_y)."""
@@ -1241,10 +1234,10 @@ class NetworkLayoutEngine:
 class ConnectionRouter:
     """Routes connections using Manhattan (orthogonal) paths with dx1/dx2/dy hints."""
 
-    SCALE = 0.05  # Must match layout engine scale
+    SCALE = NetworkLayoutEngine.SCALE  # Must match layout engine scale
 
-    def __init__(self, scale: float = 0.05):
-        self.SCALE = scale
+    def __init__(self):
+        pass
 
     def route(self, conn: Connection, model: NetworkModel,
               instance_map: Dict[str, FBInstance],
@@ -1495,28 +1488,50 @@ class NetworkSVGRenderer:
         else:
             return self.DATA_PORT_COLOR
 
+    ANY_TYPES = {"ANY", "ANY_ELEMENTARY", "ANY_MAGNITUDE", "ANY_NUM",
+                 "ANY_REAL", "ANY_INT", "ANY_BIT", "ANY_STRING", "ANY_CHARS",
+                 "ANY_DATE", "ANY_DURATION", "ANY_STRUCT"}
+
+    def _resolve_port_type(self, endpoint: str, model: NetworkModel,
+                           instance_map: Dict[str, FBInstance]) -> str:
+        """Resolve the data type of a connection endpoint (source or destination)."""
+        parts = endpoint.split(".")
+        if len(parts) == 2:
+            fb_name, port_name = parts
+            inst = instance_map.get(fb_name)
+            if inst:
+                for p in inst.data_outputs + inst.data_inputs:
+                    if p.name == port_name:
+                        return p.port_type
+        elif len(parts) == 1:
+            for ip in model.interface_ports:
+                if ip.name == parts[0]:
+                    return ip.port_type
+        return ""
+
     def _get_connection_color(self, conn: Connection, model: NetworkModel,
                                instance_map: Dict[str, FBInstance]) -> str:
-        """Determine the color for a connection."""
+        """Determine the color for a connection.
+
+        For data connections, prefer the source port type.  If the source
+        type is generic (ANY, ANY_*), fall back to the destination type so
+        that the connection uses the concrete colour.
+        """
         if conn.conn_type == "event":
             return self.EVENT_PORT_COLOR
         elif conn.conn_type == "adapter":
             return self.ADAPTER_PORT_COLOR
         else:
-            # Data connection: try to get type from source port
-            parts = conn.source.split(".")
-            if len(parts) == 2:
-                fb_name, port_name = parts
-                inst = instance_map.get(fb_name)
-                if inst:
-                    for p in inst.data_outputs + inst.data_inputs:
-                        if p.name == port_name:
-                            return self._get_port_color(p.port_type)
-            # Try interface port
-            elif len(parts) == 1:
-                for ip in model.interface_ports:
-                    if ip.name == parts[0]:
-                        return self._get_port_color(ip.port_type)
+            src_type = self._resolve_port_type(conn.source, model, instance_map)
+            if src_type and src_type not in self.ANY_TYPES:
+                return self._get_port_color(src_type)
+            # Source is generic/unknown — try destination type
+            dst_type = self._resolve_port_type(conn.destination, model, instance_map)
+            if dst_type and dst_type not in self.ANY_TYPES:
+                return self._get_port_color(dst_type)
+            # Both generic — use source color if available, else fallback
+            if src_type:
+                return self._get_port_color(src_type)
             return self.DATA_PORT_COLOR
 
     def render(self, model: NetworkModel, layout: NetworkLayoutEngine) -> str:
@@ -1625,19 +1640,19 @@ class NetworkSVGRenderer:
                 # Horizontal lines (y positions) — offset by _h_off
                 grid_idx_h = (i - _h_off) % 10
                 if grid_idx_h == 0:
-                    parts.append(f'      <line x1="0" y1="{pos:.2f}" x2="{_grid_super:.2f}" y2="{pos:.2f}" stroke="#909090" stroke-width="1.5" stroke-dasharray="6,3"/>')
+                    parts.append(f'      <line x1="0" y1="{pos:.2f}" x2="{_grid_super:.2f}" y2="{pos:.2f}" stroke="#C0C0C0" stroke-width="1.5" stroke-dasharray="6,3"/>')
                 elif grid_idx_h == 5:
-                    parts.append(f'      <line x1="0" y1="{pos:.2f}" x2="{_grid_super:.2f}" y2="{pos:.2f}" stroke="#A0A0A0" stroke-width="1" stroke-dasharray="4,3"/>')
+                    parts.append(f'      <line x1="0" y1="{pos:.2f}" x2="{_grid_super:.2f}" y2="{pos:.2f}" stroke="#C0C0C0" stroke-width="1" stroke-dasharray="4,3"/>')
                 else:
-                    parts.append(f'      <line x1="0" y1="{pos:.2f}" x2="{_grid_super:.2f}" y2="{pos:.2f}" stroke="#B8B8B8" stroke-width="0.5" stroke-dasharray="1,3"/>')
+                    parts.append(f'      <line x1="0" y1="{pos:.2f}" x2="{_grid_super:.2f}" y2="{pos:.2f}" stroke="#C0C0C0" stroke-width="0.5" stroke-dasharray="1,3"/>')
                 # Vertical lines (x positions) — offset by _v_off
                 grid_idx_v = (i - _v_off) % 10
                 if grid_idx_v == 0:
-                    parts.append(f'      <line x1="{pos:.2f}" y1="0" x2="{pos:.2f}" y2="{_grid_super:.2f}" stroke="#909090" stroke-width="1.5" stroke-dasharray="6,3"/>')
+                    parts.append(f'      <line x1="{pos:.2f}" y1="0" x2="{pos:.2f}" y2="{_grid_super:.2f}" stroke="#C0C0C0" stroke-width="1.5" stroke-dasharray="6,3"/>')
                 elif grid_idx_v == 5:
-                    parts.append(f'      <line x1="{pos:.2f}" y1="0" x2="{pos:.2f}" y2="{_grid_super:.2f}" stroke="#A0A0A0" stroke-width="1" stroke-dasharray="4,3"/>')
+                    parts.append(f'      <line x1="{pos:.2f}" y1="0" x2="{pos:.2f}" y2="{_grid_super:.2f}" stroke="#C0C0C0" stroke-width="1" stroke-dasharray="4,3"/>')
                 else:
-                    parts.append(f'      <line x1="{pos:.2f}" y1="0" x2="{pos:.2f}" y2="{_grid_super:.2f}" stroke="#B8B8B8" stroke-width="0.5" stroke-dasharray="1,3"/>')
+                    parts.append(f'      <line x1="{pos:.2f}" y1="0" x2="{pos:.2f}" y2="{_grid_super:.2f}" stroke="#C0C0C0" stroke-width="0.5" stroke-dasharray="1,3"/>')
             parts.append(f'    </pattern>')
             parts.append(f'  </defs>')
             parts.append(f'  <rect x="{gx:.1f}" y="{gy:.1f}" width="{gw:.1f}" height="{gh:.1f}" fill="url(#grid)"/>')
@@ -1656,7 +1671,7 @@ class NetworkSVGRenderer:
                 right_idx += 1
 
         # Render connections first (behind blocks)
-        router = ConnectionRouter(scale=layout.SCALE)
+        router = ConnectionRouter()
         parts.append('  <g id="connections">')
         for conn in model.connections:
             waypoints = router.route(conn, model, instance_map, interface_map)
@@ -1723,6 +1738,9 @@ class NetworkSVGRenderer:
 
         # Data ports
         parts.append(self._render_data_ports(inst))
+
+        # Parameter value labels (literals on input ports)
+        parts.append(self._render_parameter_labels(inst))
 
         # Adapter ports
         parts.append(self._render_adapter_ports(inst))
@@ -1946,6 +1964,52 @@ class NetworkSVGRenderer:
             color = self._get_port_color(port.port_type)
             parts.append(self._render_port_right(port, y, inst.block_width, color))
             y += self.PORT_ROW_HEIGHT
+
+        return "\n".join(parts)
+
+    def _render_parameter_labels(self, inst: FBInstance) -> str:
+        """Render literal/constant value labels on input ports that have parameters."""
+        if not inst.parameters:
+            return ""
+
+        parts = []
+        top_padding = self.PORT_ROW_HEIGHT / 2 - 4
+
+        # Build port name → local y lookup for all input ports
+        port_y_map: Dict[str, float] = {}
+        # Event inputs
+        y = self.PORT_ROW_HEIGHT / 2 + top_padding
+        for port in inst.event_inputs:
+            port_y_map[port.name] = y
+            y += self.PORT_ROW_HEIGHT
+        # Data inputs
+        y = inst.name_section_bottom + self.PORT_ROW_HEIGHT / 2
+        for port in inst.data_inputs:
+            port_y_map[port.name] = y
+            y += self.PORT_ROW_HEIGHT
+
+        # Build port name → type lookup
+        port_type_map: Dict[str, str] = {}
+        for port in inst.event_inputs:
+            port_type_map[port.name] = "Event"
+        for port in inst.data_inputs:
+            port_type_map[port.name] = port.port_type
+
+        for param_name, param_value in inst.parameters.items():
+            if param_name.startswith("__"):
+                continue  # skip internal keys
+            if param_name not in port_y_map:
+                continue  # parameter port not found
+            py = port_y_map[param_name]
+            port_type = port_type_map.get(param_name, "")
+            display_value = _format_parameter_value(param_value, port_type)
+            display_value = _truncate_label(display_value, self.settings.max_value_label_size)
+            text_x = -3
+            text_y = py + self.FONT_SIZE * 0.35
+            parts.append(
+                f'      <text x="{text_x}" y="{text_y:.1f}"'
+                f' font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"'
+                f' fill="#000000" text-anchor="end">{display_value}</text>')
 
         return "\n".join(parts)
 
@@ -2189,19 +2253,17 @@ class NetworkSVGRenderer:
 # ===========================================================================
 
 def convert_network_to_svg(xml_source, output_path: str = None,
-                           type_lib: str = None,
+                           type_lib = None,
                            show_shadow: bool = True,
                            show_grid: bool = False,
-                           scale: float = None,
                            settings: BlockSizeSettings = None) -> str:
     """Convert an IEC 61499 network XML to SVG.
 
     Args:
         xml_source: File path or XML string
         output_path: Optional output file path
-        type_lib: Optional type library root directory
+        type_lib: Type library root directory or list of directories
         show_shadow: Enable drop shadow
-        scale: Coordinate scale factor (default: auto)
         settings: Block size settings (default: load from block_size_settings.ini)
 
     Returns:
@@ -2215,7 +2277,12 @@ def convert_network_to_svg(xml_source, output_path: str = None,
     model = parser.parse(xml_source)
 
     # Resolve types
-    type_lib_paths = [type_lib] if type_lib else []
+    if isinstance(type_lib, list):
+        type_lib_paths = list(type_lib)
+    elif type_lib:
+        type_lib_paths = [type_lib]
+    else:
+        type_lib_paths = []
     # Also try the directory containing the input file
     if isinstance(xml_source, str) and not ('<' in xml_source):
         input_dir = str(Path(xml_source).parent)
@@ -2226,7 +2293,7 @@ def convert_network_to_svg(xml_source, output_path: str = None,
     resolver.resolve(model)
 
     # Layout
-    layout = NetworkLayoutEngine(scale=scale, settings=settings)
+    layout = NetworkLayoutEngine(settings=settings)
     layout.layout(model)
 
     # Render
@@ -2243,10 +2310,9 @@ def convert_network_to_svg(xml_source, output_path: str = None,
 
 
 def convert_batch(input_dir: str, output_dir: str,
-                  type_lib: str = None,
+                  type_lib = None,
                   show_shadow: bool = True,
                   show_grid: bool = False,
-                  scale: float = None,
                   recursive: bool = True,
                   settings: BlockSizeSettings = None) -> int:
     """Batch convert all network files in a directory."""
@@ -2279,7 +2345,6 @@ def convert_batch(input_dir: str, output_dir: str,
                                       type_lib=type_lib,
                                       show_shadow=show_shadow,
                                       show_grid=show_grid,
-                                      scale=scale,
                                       settings=settings)
                 count += 1
             except Exception as e:
@@ -2298,8 +2363,7 @@ def main():
     )
     parser.add_argument("input", help="Input .fbt/.sub/.sys file or directory")
     parser.add_argument("-o", "--output", help="Output SVG file or directory")
-    parser.add_argument("--type-lib", help="Type library root directory for interface resolution")
-    parser.add_argument("--scale", type=float, default=None, help="Coordinate scale factor (default: auto)")
+    parser.add_argument("--type-lib", action="append", default=[], help="Type library root directory (can be specified multiple times)")
     parser.add_argument("--stdout", action="store_true", help="Print SVG to stdout")
     parser.add_argument("--batch", action="store_true", help="Batch convert directory")
     parser.add_argument("--no-recursive", action="store_true", help="Don't recurse in batch mode")
@@ -2324,7 +2388,6 @@ def main():
                             type_lib=args.type_lib,
                             show_shadow=show_shadow,
                             show_grid=show_grid,
-                            scale=args.scale,
                             recursive=not args.no_recursive,
                             settings=settings)
         print(f"Converted {count} network files to {output_dir}")
@@ -2333,7 +2396,6 @@ def main():
                                      type_lib=args.type_lib,
                                      show_shadow=show_shadow,
                                      show_grid=show_grid,
-                                     scale=args.scale,
                                      settings=settings)
         print(svg)
     else:
@@ -2342,7 +2404,6 @@ def main():
                               type_lib=args.type_lib,
                               show_shadow=show_shadow,
                               show_grid=show_grid,
-                              scale=args.scale,
                               settings=settings)
         print(f"Written to {output_path}")
 
