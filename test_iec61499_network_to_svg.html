@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IEC 61499 Network to SVG Converter</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .panel {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .input-panel {
+            flex: 1;
+            min-width: 400px;
+        }
+        .output-panel {
+            flex: 2;
+            min-width: 600px;
+        }
+        textarea {
+            width: 100%;
+            height: 350px;
+            font-family: monospace;
+            font-size: 12px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 10px 5px 10px 0;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button.secondary {
+            background-color: #607D8B;
+        }
+        button.secondary:hover {
+            background-color: #546E7A;
+        }
+        .options {
+            margin: 10px 0;
+        }
+        .options label {
+            margin-right: 15px;
+        }
+        #svgOutput {
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 10px;
+            background: white;
+            min-height: 400px;
+            overflow: auto;
+            position: relative;
+        }
+        #svgOutput svg {
+            max-width: none;
+        }
+        .zoom-controls {
+            margin: 10px 0;
+        }
+        .zoom-controls button {
+            padding: 5px 15px;
+            margin-right: 5px;
+        }
+        .zoom-controls span {
+            margin: 0 10px;
+            font-weight: bold;
+        }
+        #error {
+            color: red;
+            margin-top: 10px;
+        }
+        .type-lib-section {
+            margin: 10px 0;
+            padding: 10px;
+            background: #f9f9f9;
+            border-radius: 4px;
+        }
+        .type-lib-section h4 {
+            margin: 0 0 8px 0;
+            color: #555;
+        }
+        #typeLibStatus {
+            color: #666;
+            font-size: 12px;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>IEC 61499 Network to SVG Converter</h1>
+
+    <div class="container">
+        <div class="panel input-panel">
+            <h3>XML Input (.fbt / .sub — composite/network types)</h3>
+            <textarea id="xmlInput" placeholder="Paste your composite FBT or SubApp XML here..."></textarea>
+
+            <div class="type-lib-section">
+                <h4>Type Library (optional — for full interface resolution)</h4>
+                <input type="file" id="typeLibInput" webkitdirectory directory multiple
+                       style="display:none" onchange="loadTypeLibrary(this)">
+                <button class="secondary" onclick="document.getElementById('typeLibInput').click()">
+                    Select Type Library Folder...
+                </button>
+                <div id="typeLibStatus">No type library loaded. FB instances will use connection-inferred interfaces.</div>
+            </div>
+
+            <div class="type-lib-section">
+                <h4>Block Size Settings (optional)</h4>
+                <input type="file" id="settingsInput" accept=".ini" style="display:none" onchange="loadSettings(this)">
+                <button class="secondary" onclick="document.getElementById('settingsInput').click()">
+                    Load Settings INI...
+                </button>
+                <div id="settingsStatus">Using defaults. Load block_size_settings.ini to customize.</div>
+            </div>
+
+            <div class="options">
+                <label><input type="checkbox" id="showShadow" checked> Show Shadow</label>
+                <label><input type="checkbox" id="showGrid"> Show Grid</label>
+            </div>
+
+            <input type="file" id="fileInput" accept=".fbt,.sub,.sys" style="display:none" onchange="loadFile(this)">
+            <button onclick="document.getElementById('fileInput').click()">Open File...</button>
+            <button onclick="convertToSvg()">Convert to SVG</button>
+            <button onclick="loadExample()">Load Example</button>
+            <button onclick="downloadSvg()">Download SVG</button>
+
+            <div id="error"></div>
+        </div>
+
+        <div class="panel output-panel">
+            <h3>SVG Output</h3>
+            <div class="zoom-controls">
+                <button onclick="zoomIn()">Zoom +</button>
+                <button onclick="zoomOut()">Zoom -</button>
+                <button onclick="zoomFit()">Fit</button>
+                <span id="zoomLevel">100%</span>
+            </div>
+            <div id="svgOutput"></div>
+        </div>
+    </div>
+
+    <script src="iec61499_network_to_svg.js"></script>
+    <script>
+        // Type library and settings storage
+        let typeLibXmls = {};
+        let settingsIniText = null;
+        let currentZoom = 1.0;
+
+        // Example: simple composite FB network
+        const exampleXml = `<?xml version="1.0" encoding="UTF-8"?>
+<FBType Name="CompositeExample" Comment="Example composite function block with internal network">
+    <InterfaceList>
+        <EventInputs>
+            <Event Name="INIT" Type="Event" Comment="Initialization"/>
+            <Event Name="REQ" Type="Event" Comment="Request"/>
+        </EventInputs>
+        <EventOutputs>
+            <Event Name="INITO" Type="Event" Comment="Init confirm"/>
+            <Event Name="CNF" Type="Event" Comment="Confirm"/>
+        </EventOutputs>
+        <InputVars>
+            <VarDeclaration Name="QI" Type="BOOL"/>
+            <VarDeclaration Name="IN1" Type="INT"/>
+            <VarDeclaration Name="IN2" Type="INT"/>
+        </InputVars>
+        <OutputVars>
+            <VarDeclaration Name="QO" Type="BOOL"/>
+            <VarDeclaration Name="OUT" Type="INT"/>
+        </OutputVars>
+    </InterfaceList>
+    <FBNetwork>
+        <FB Name="ADD" Type="F_ADD" x="2000" y="400">
+        </FB>
+        <FB Name="GATE" Type="E_PERMIT" x="4000" y="0">
+        </FB>
+        <EventConnections>
+            <Connection Source="REQ" Destination="ADD.REQ" dx1="1400"/>
+            <Connection Source="ADD.CNF" Destination="GATE.EI" dx1="600"/>
+            <Connection Source="INIT" Destination="INITO" dx1="5200"/>
+            <Connection Source="GATE.EO" Destination="CNF" dx1="800"/>
+        </EventConnections>
+        <DataConnections>
+            <Connection Source="IN1" Destination="ADD.IN1" dx1="1200"/>
+            <Connection Source="IN2" Destination="ADD.IN2" dx1="1000"/>
+            <Connection Source="ADD.OUT" Destination="OUT" dx1="2800"/>
+            <Connection Source="QI" Destination="GATE.PERMIT" dx1="3000"/>
+            <Connection Source="QI" Destination="QO"/>
+        </DataConnections>
+    </FBNetwork>
+</FBType>`;
+
+        function convertToSvg() {
+            const xmlInput = document.getElementById('xmlInput').value;
+            const errorDiv = document.getElementById('error');
+            const svgOutput = document.getElementById('svgOutput');
+
+            errorDiv.textContent = '';
+
+            if (!xmlInput.trim()) {
+                errorDiv.textContent = 'Please enter XML content';
+                return;
+            }
+
+            try {
+                const options = {
+                    showShadow: document.getElementById('showShadow').checked,
+                    showGrid: document.getElementById('showGrid').checked,
+                    typeLibXmls: typeLibXmls,
+                    settingsIni: settingsIniText
+                };
+
+                const svg = convertNetworkToSvg(xmlInput, options);
+                svgOutput.innerHTML = svg;
+                currentZoom = 1.0;
+                document.getElementById('zoomLevel').textContent = '100%';
+            } catch (e) {
+                errorDiv.textContent = 'Error: ' + e.message;
+                console.error(e);
+            }
+        }
+
+        function loadFile(input) {
+            const file = input.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                document.getElementById('xmlInput').value = e.target.result;
+                convertToSvg();
+            };
+            reader.readAsText(file);
+            input.value = '';
+        }
+
+        function loadTypeLibrary(input) {
+            const files = input.files;
+            if (!files || files.length === 0) return;
+
+            typeLibXmls = {};
+            let loaded = 0;
+            let total = 0;
+
+            for (const file of files) {
+                if (/\.(fbt|sub|adp)$/i.test(file.name)) {
+                    total++;
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const name = file.name.replace(/\.(fbt|sub|adp)$/i, '');
+                        typeLibXmls[name] = e.target.result;
+
+                        // Also index by relative path with :: separators
+                        const relPath = file.webkitRelativePath || file.name;
+                        const parts = relPath.split('/');
+                        if (parts.length > 1) {
+                            // Remove the top-level directory and file extension
+                            const qualParts = parts.slice(1);
+                            qualParts[qualParts.length - 1] = name;
+                            typeLibXmls[qualParts.join('::')] = e.target.result;
+                        }
+
+                        loaded++;
+                        document.getElementById('typeLibStatus').textContent =
+                            `Loaded ${loaded}/${total} type definitions.`;
+
+                        // Auto-convert when all files are loaded and there's XML input
+                        if (loaded === total && document.getElementById('xmlInput').value.trim()) {
+                            convertToSvg();
+                        }
+                    };
+                    reader.readAsText(file);
+                }
+            }
+
+            if (total === 0) {
+                document.getElementById('typeLibStatus').textContent =
+                    'No .fbt/.sub/.adp files found in selected folder.';
+            } else {
+                document.getElementById('typeLibStatus').textContent =
+                    `Loading ${total} type definitions...`;
+            }
+        }
+
+        function loadSettings(input) {
+            const file = input.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                settingsIniText = e.target.result;
+                document.getElementById('settingsStatus').textContent =
+                    `Loaded settings from ${file.name}`;
+                // Re-convert if there's XML input
+                if (document.getElementById('xmlInput').value.trim()) {
+                    convertToSvg();
+                }
+            };
+            reader.readAsText(file);
+            input.value = '';
+        }
+
+        function loadExample() {
+            document.getElementById('xmlInput').value = exampleXml;
+            convertToSvg();
+        }
+
+        function downloadSvg() {
+            const svgOutput = document.getElementById('svgOutput');
+            const svg = svgOutput.innerHTML;
+
+            if (!svg.trim()) {
+                document.getElementById('error').textContent = 'No SVG to download. Convert first.';
+                return;
+            }
+
+            const blob = new Blob([svg], { type: 'image/svg+xml' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'network.svg';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function zoomIn() {
+            currentZoom *= 1.25;
+            applyZoom();
+        }
+
+        function zoomOut() {
+            currentZoom *= 0.8;
+            applyZoom();
+        }
+
+        function zoomFit() {
+            currentZoom = 1.0;
+            const svgOutput = document.getElementById('svgOutput');
+            const svgElem = svgOutput.querySelector('svg');
+            if (svgElem) {
+                svgElem.style.width = '100%';
+                svgElem.style.height = 'auto';
+                svgElem.style.transform = '';
+                svgElem.style.transformOrigin = '';
+            }
+            document.getElementById('zoomLevel').textContent = 'Fit';
+        }
+
+        function applyZoom() {
+            const svgOutput = document.getElementById('svgOutput');
+            const svgElem = svgOutput.querySelector('svg');
+            if (svgElem) {
+                svgElem.style.width = '';
+                svgElem.style.height = '';
+                svgElem.style.transform = `scale(${currentZoom})`;
+                svgElem.style.transformOrigin = 'top left';
+            }
+            document.getElementById('zoomLevel').textContent = `${Math.round(currentZoom * 100)}%`;
+        }
+
+        // Load example on page load
+        window.onload = loadExample;
+    </script>
+</body>
+</html>
