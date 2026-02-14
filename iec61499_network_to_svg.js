@@ -53,16 +53,19 @@ function _truncateLabel(text, maxLen) {
 function _formatParameterValue(value, portType) {
     // Ensure IEC 61131-3 typed literal notation (TYPE#value).
     // If the value already has a type prefix, keep it; otherwise prepend portType.
+    // Returns plain text (not XML-escaped) so truncation can be applied safely.
     if (!value.includes('#') && portType) {
         value = portType + '#' + value;
     }
-    // XML-escape for SVG
-    value = value
+    return value;
+}
+
+function _xmlEscape(text) {
+    return text
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
-    return value;
 }
 
 // ===========================================================================
@@ -1207,15 +1210,27 @@ class NetworkSVGRenderer {
         this.showGrid = options.showGrid || false;
         this.settings = options.settings || new BlockSizeSettings();
 
-        this.FONT_FAMILY = "'TGL 0-17', 'Times New Roman', Times, serif";
-        this.FONT_FAMILY_ITALIC = "'TGL 0-16', 'Times New Roman', Times, serif";
+        this.FONT_FAMILY = "'TGL 0-17_std', 'TGL 0-17', 'Times New Roman', Times, serif";
+        this.FONT_FAMILY_ITALIC = "'TGL 0-16_std', 'TGL 0-16', 'Times New Roman', Times, serif";
         this.FONT_SIZE = 12;
 
         this.FONT_FACE_STYLE = `
   <style>
     @font-face {
+      font-family: "TGL 0-17_std";
+      src: local("TGL 0-17_std");
+      font-style: normal;
+      font-weight: normal;
+    }
+    @font-face {
       font-family: "TGL 0-17";
       src: local("TGL 0-17"), local("TGL 0-17 alt");
+      font-style: normal;
+      font-weight: normal;
+    }
+    @font-face {
+      font-family: "TGL 0-16_std";
+      src: local("TGL 0-16_std");
       font-style: normal;
       font-weight: normal;
     }
@@ -1554,10 +1569,11 @@ class NetworkSVGRenderer {
         const iconW = 14, iconH = 14, iconR = 1, iconND = 1.5;
         const gapIconText = 4;
 
-        // Calculate content width to center icon + type name together
+        // Calculate content width to center icon + type name between notches
+        const notch = 8;
         const typeTextWidth = this._measureText(shortType, true);
         const totalContentWidth = iconW + gapIconText + typeTextWidth;
-        const contentStartX = (w - totalContentWidth) / 2;
+        const contentStartX = notch + ((w - 2 * notch) - totalContentWidth) / 2;
 
         const iconX = contentStartX;
         const iconY = centerY - iconH / 2;
@@ -1692,6 +1708,7 @@ class NetworkSVGRenderer {
             const portType = portTypeMap[paramName] || "";
             let displayValue = _formatParameterValue(paramValue, portType);
             displayValue = _truncateLabel(displayValue, this.settings.maxValueLabelSize);
+            displayValue = _xmlEscape(displayValue);
             const textX = -3;
             const textY = py + this.FONT_SIZE * 0.35;
             parts.push(

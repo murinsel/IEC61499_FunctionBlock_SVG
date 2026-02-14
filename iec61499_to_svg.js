@@ -250,13 +250,13 @@ class SVGRenderer {
   <style>
     @font-face {
       font-family: "TGL";
-      src: local("TGL 0-17"), local("TGL 0-17 alt");
+      src: local("TGL 0-17_std"), local("TGL 0-17"), local("TGL 0-17 alt");
       font-style: normal;
       font-weight: normal;
     }
     @font-face {
       font-family: "TGL";
-      src: local("TGL 0-16");
+      src: local("TGL 0-16_std"), local("TGL 0-16");
       font-style: italic;
       font-weight: normal;
     }

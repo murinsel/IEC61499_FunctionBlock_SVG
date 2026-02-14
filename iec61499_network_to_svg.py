@@ -91,17 +91,21 @@ def _format_parameter_value(value: str, port_type: str = "") -> str:
     If the value already contains a type prefix it is kept as-is.
     Otherwise the port_type is prepended.
     Examples: WSTRING#"OK" → WSTRING#"OK", TRUE → BOOL#TRUE, '/' → STRING#'/'
+    Note: Returns plain text (not XML-escaped) so truncation can be applied safely.
     """
     # If value already has a type prefix, keep it
     if '#' not in value and port_type:
         value = f"{port_type}#{value}"
-    # XML-escape for SVG
-    value = (value
+    return value
+
+
+def _xml_escape(text: str) -> str:
+    """Escape text for safe embedding in SVG/XML."""
+    return (text
         .replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
         .replace('"', "&quot;"))
-    return value
 
 
 # ===========================================================================
@@ -755,9 +759,15 @@ class NetworkLayoutEngine:
             return
 
         home = os.path.expanduser("~")
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        tgl_dir = os.path.join(script_dir, "tgl")
         font_candidates = [
             f"{home}/Library/Fonts/TGL 0-17.ttf",
+            f"{home}/Library/Fonts/TGL 0-17_std.ttf",
             f"{home}/Library/Fonts/TGL 0-17 alt.ttf",
+            f"{home}/Library/Fonts/TGL 0-17 alt_std.ttf",
+            os.path.join(tgl_dir, "TGL 0-17.ttf"),
+            os.path.join(tgl_dir, "TGL 0-17_std.ttf"),
             "/Library/Fonts/TGL 0-17.ttf",
             "/Library/Fonts/TGL 0-17 alt.ttf",
             "/Library/Fonts/Times New Roman.ttf",
@@ -767,6 +777,9 @@ class NetworkLayoutEngine:
         ]
         italic_candidates = [
             f"{home}/Library/Fonts/TGL 0-16.ttf",
+            f"{home}/Library/Fonts/TGL 0-16_std.ttf",
+            os.path.join(tgl_dir, "TGL 0-16.ttf"),
+            os.path.join(tgl_dir, "TGL 0-16_std.ttf"),
             "/Library/Fonts/TGL 0-16.ttf",
             "/Library/Fonts/Times New Roman Italic.ttf",
             "/System/Library/Fonts/Times.ttc",
@@ -1396,15 +1409,27 @@ class NetworkSVGRenderer:
     """Renders the network model as SVG."""
 
     # Fonts
-    FONT_FAMILY = "'TGL 0-17', 'Times New Roman', Times, serif"
-    FONT_FAMILY_ITALIC = "'TGL 0-16', 'Times New Roman', Times, serif"
+    FONT_FAMILY = "'TGL 0-17_std', 'TGL 0-17', 'Times New Roman', Times, serif"
+    FONT_FAMILY_ITALIC = "'TGL 0-16_std', 'TGL 0-16', 'Times New Roman', Times, serif"
     FONT_SIZE = 12
 
     FONT_FACE_STYLE = '''
   <style>
     @font-face {
+      font-family: "TGL 0-17_std";
+      src: local("TGL 0-17_std");
+      font-style: normal;
+      font-weight: normal;
+    }
+    @font-face {
       font-family: "TGL 0-17";
       src: local("TGL 0-17"), local("TGL 0-17 alt");
+      font-style: normal;
+      font-weight: normal;
+    }
+    @font-face {
+      font-family: "TGL 0-16_std";
+      src: local("TGL 0-16_std");
       font-style: normal;
       font-weight: normal;
     }
@@ -1449,16 +1474,55 @@ class NetworkSVGRenderer:
         # Load font for text measurement (same as layout engine)
         self._font = None
         self._font_italic = None
-        if PILLOW_AVAILABLE:
+        self._init_fonts()
+
+    def _init_fonts(self):
+        """Initialize fonts for text measurement."""
+        if not PILLOW_AVAILABLE:
+            return
+
+        home = os.path.expanduser("~")
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        tgl_dir = os.path.join(script_dir, "tgl")
+        font_candidates = [
+            f"{home}/Library/Fonts/TGL 0-17.ttf",
+            f"{home}/Library/Fonts/TGL 0-17_std.ttf",
+            f"{home}/Library/Fonts/TGL 0-17 alt.ttf",
+            f"{home}/Library/Fonts/TGL 0-17 alt_std.ttf",
+            os.path.join(tgl_dir, "TGL 0-17.ttf"),
+            os.path.join(tgl_dir, "TGL 0-17_std.ttf"),
+            "/Library/Fonts/TGL 0-17.ttf",
+            "/Library/Fonts/TGL 0-17 alt.ttf",
+            "/Library/Fonts/Times New Roman.ttf",
+            "/System/Library/Fonts/Times.ttc",
+            "/usr/share/fonts/truetype/msttcorefonts/Times_New_Roman.ttf",
+            "C:\\Windows\\Fonts\\times.ttf",
+        ]
+        italic_candidates = [
+            f"{home}/Library/Fonts/TGL 0-16.ttf",
+            f"{home}/Library/Fonts/TGL 0-16_std.ttf",
+            os.path.join(tgl_dir, "TGL 0-16.ttf"),
+            os.path.join(tgl_dir, "TGL 0-16_std.ttf"),
+            "/Library/Fonts/TGL 0-16.ttf",
+            "/Library/Fonts/Times New Roman Italic.ttf",
+            "/System/Library/Fonts/Times.ttc",
+            "/usr/share/fonts/truetype/msttcorefonts/Times_New_Roman_Italic.ttf",
+            "C:\\Windows\\Fonts\\timesi.ttf",
+        ]
+        for fp in font_candidates:
             try:
-                self._font = ImageFont.truetype("TGL 0-17", self.FONT_SIZE)
-            except (OSError, IOError):
-                pass
+                self._font = ImageFont.truetype(fp, self.FONT_SIZE)
+                break
+            except:
+                continue
+        for fp in italic_candidates:
             try:
-                self._font_italic = ImageFont.truetype("TGL 0-16", self.FONT_SIZE)
-            except (OSError, IOError):
-                if self._font:
-                    self._font_italic = self._font
+                self._font_italic = ImageFont.truetype(fp, self.FONT_SIZE)
+                break
+            except:
+                continue
+        if self._font_italic is None and self._font is not None:
+            self._font_italic = self._font
 
     def _measure_text(self, text: str, italic: bool = False) -> float:
         """Measure text width for layout calculations."""
@@ -1817,11 +1881,13 @@ class NetworkSVGRenderer:
         icon_notch_depth = 1.5
         icon_r = 1
 
-        # Calculate content width to center icon + type name together
+        # Calculate content width to center icon + type name between notches
+        notch = 8
         gap_icon_text = 4
         type_width = self._measure_text(short_type, italic=True)
         total_content_width = icon_w + gap_icon_text + type_width
-        content_start_x = (w - total_content_width) / 2
+        # Center within the area between the two notch indents
+        content_start_x = notch + ((w - 2 * notch) - total_content_width) / 2
 
         # Icon position (centered together with type name)
         icon_x = content_start_x
@@ -2004,6 +2070,7 @@ class NetworkSVGRenderer:
             port_type = port_type_map.get(param_name, "")
             display_value = _format_parameter_value(param_value, port_type)
             display_value = _truncate_label(display_value, self.settings.max_value_label_size)
+            display_value = _xml_escape(display_value)
             text_x = -3
             text_y = py + self.FONT_SIZE * 0.35
             parts.append(

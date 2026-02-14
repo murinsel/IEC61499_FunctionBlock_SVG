@@ -229,13 +229,13 @@ class SVGRenderer:
   <style>
     @font-face {
       font-family: "TGL";
-      src: local("TGL 0-17"), local("TGL 0-17 alt");
+      src: local("TGL 0-17_std"), local("TGL 0-17"), local("TGL 0-17 alt");
       font-style: normal;
       font-weight: normal;
     }
     @font-face {
       font-family: "TGL";
-      src: local("TGL 0-16");
+      src: local("TGL 0-16_std"), local("TGL 0-16");
       font-style: italic;
       font-weight: normal;
     }
@@ -308,29 +308,38 @@ class SVGRenderer:
         import os
         home = os.path.expanduser("~")
 
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        tgl_dir = os.path.join(script_dir, "tgl")
         font_candidates = [
             # TGL fonts - actual fonts used in the SVG
-            f"{home}/Library/Fonts/TGL 0-17.ttf",  # macOS user fonts
-            f"{home}/Library/Fonts/TGL 0-17 alt.ttf",  # macOS user fonts (alternate name)
-            "/Library/Fonts/TGL 0-17.ttf",  # macOS system fonts
-            "/Library/Fonts/TGL 0-17 alt.ttf",  # macOS system fonts (alternate name)
+            f"{home}/Library/Fonts/TGL 0-17.ttf",
+            f"{home}/Library/Fonts/TGL 0-17_std.ttf",
+            f"{home}/Library/Fonts/TGL 0-17 alt.ttf",
+            f"{home}/Library/Fonts/TGL 0-17 alt_std.ttf",
+            os.path.join(tgl_dir, "TGL 0-17.ttf"),
+            os.path.join(tgl_dir, "TGL 0-17_std.ttf"),
+            "/Library/Fonts/TGL 0-17.ttf",
+            "/Library/Fonts/TGL 0-17 alt.ttf",
             # Fallback system fonts (Times New Roman)
-            "/Library/Fonts/Times New Roman.ttf",  # macOS
-            "/System/Library/Fonts/Times.ttc",  # macOS system
-            "/usr/share/fonts/truetype/msttcorefonts/Times_New_Roman.ttf",  # Linux
-            "/usr/share/fonts/TTF/times.ttf",  # Linux
-            "C:\\Windows\\Fonts\\times.ttf",  # Windows
+            "/Library/Fonts/Times New Roman.ttf",
+            "/System/Library/Fonts/Times.ttc",
+            "/usr/share/fonts/truetype/msttcorefonts/Times_New_Roman.ttf",
+            "/usr/share/fonts/TTF/times.ttf",
+            "C:\\Windows\\Fonts\\times.ttf",
         ]
 
         italic_candidates = [
             # TGL italic font
-            f"{home}/Library/Fonts/TGL 0-16.ttf",  # macOS user fonts - TGL italic
-            "/Library/Fonts/TGL 0-16.ttf",  # macOS system fonts
+            f"{home}/Library/Fonts/TGL 0-16.ttf",
+            f"{home}/Library/Fonts/TGL 0-16_std.ttf",
+            os.path.join(tgl_dir, "TGL 0-16.ttf"),
+            os.path.join(tgl_dir, "TGL 0-16_std.ttf"),
+            "/Library/Fonts/TGL 0-16.ttf",
             # Fallback system fonts (Times New Roman Italic)
-            "/Library/Fonts/Times New Roman Italic.ttf",  # macOS
-            "/System/Library/Fonts/Times.ttc",  # macOS system
-            "/usr/share/fonts/truetype/msttcorefonts/Times_New_Roman_Italic.ttf",  # Linux
-            "C:\\Windows\\Fonts\\timesi.ttf",  # Windows
+            "/Library/Fonts/Times New Roman Italic.ttf",
+            "/System/Library/Fonts/Times.ttc",
+            "/usr/share/fonts/truetype/msttcorefonts/Times_New_Roman_Italic.ttf",
+            "C:\\Windows\\Fonts\\timesi.ttf",
         ]
 
         for font_path in font_candidates:
