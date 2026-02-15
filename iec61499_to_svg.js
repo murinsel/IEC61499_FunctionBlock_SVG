@@ -375,7 +375,7 @@ class SVGRenderer {
         if (this._measureContext) {
             const fontStyle = italic ? 'italic ' : '';
             // Use sans-serif as fallback for measurement since TGL fonts may not be available
-            this._measureContext.font = `${fontStyle}${fontSize}px 'TGL 0-17', 'Times New Roman', Times, serif`;
+            this._measureContext.font = `${fontStyle}${fontSize}px 'TGL 0-17_std', 'TGL 0-17', 'Times New Roman', Times, serif`;
             return this._measureContext.measureText(text).width;
         }
 

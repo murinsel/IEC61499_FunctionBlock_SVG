@@ -670,7 +670,7 @@ class NetworkLayoutEngine {
     _measureText(text, italic = false) {
         if (this._ctx) {
             const style = italic ? 'italic' : 'normal';
-            this._ctx.font = `${style} ${this.FONT_SIZE}px "TGL", "Times New Roman", Times, serif`;
+            this._ctx.font = `${style} ${this.FONT_SIZE}px "TGL 0-17_std", "TGL 0-17", "Times New Roman", Times, serif`;
             return this._ctx.measureText(text).width;
         }
         return text.length * 8.5;
@@ -1261,10 +1261,23 @@ class NetworkSVGRenderer {
         this.TRIANGLE_WIDTH = 5;
         this.TRIANGLE_HEIGHT = 10;
         this.CONN_DIAG_LEN = 4;
+
+        // Canvas for text measurement (browser only)
+        this._ctx = null;
+        try {
+            if (typeof document !== 'undefined') {
+                const canvas = document.createElement('canvas');
+                this._ctx = canvas.getContext('2d');
+            }
+        } catch (e) {}
     }
 
     _measureText(text, italic = false) {
-        // Approximate text width (same heuristic as layout engine)
+        if (this._ctx) {
+            const style = italic ? 'italic' : 'normal';
+            this._ctx.font = `${style} ${this.FONT_SIZE}px "TGL 0-17_std", "TGL 0-17", "Times New Roman", Times, serif`;
+            return this._ctx.measureText(text).width;
+        }
         return text.length * 8.5;
     }
 
