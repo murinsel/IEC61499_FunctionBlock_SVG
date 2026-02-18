@@ -32,17 +32,37 @@ class BlockSizeSettings {
 
 function loadBlockSizeSettings(iniText) {
     const settings = {};
-    if (!iniText) return new BlockSizeSettings();
+    const typeLibPaths = [];
+    if (!iniText) {
+        const bs = new BlockSizeSettings();
+        bs.typeLibPaths = typeLibPaths;
+        return bs;
+    }
+    let currentSection = "";
     for (const line of iniText.split('\n')) {
         const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('[') || trimmed.startsWith('#') || trimmed.startsWith(';')) continue;
+        if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';')) continue;
+        const sectionMatch = trimmed.match(/^\[(.+)\]$/);
+        if (sectionMatch) {
+            currentSection = sectionMatch[1];
+            continue;
+        }
         const eq = trimmed.indexOf('=');
         if (eq < 0) continue;
         const key = trimmed.substring(0, eq).trim();
-        const val = parseInt(trimmed.substring(eq + 1).trim(), 10);
-        if (!isNaN(val)) settings[key] = val;
+        const valStr = trimmed.substring(eq + 1).trim();
+        if (currentSection === "TypeLibrary") {
+            if (key.startsWith("path") && valStr) {
+                typeLibPaths.push(valStr);
+            }
+        } else {
+            const val = parseInt(valStr, 10);
+            if (!isNaN(val)) settings[key] = val;
+        }
     }
-    return new BlockSizeSettings(settings);
+    const bs = new BlockSizeSettings(settings);
+    bs.typeLibPaths = typeLibPaths;
+    return bs;
 }
 
 function _truncateLabel(text, maxLen) {
@@ -99,6 +119,7 @@ class FBInstance {
         this.fbType = "";
         // Layout fields
         this.blockWidth = 0;
+        this.figureWidth = 0;
         this.blockHeight = 0;
         this.renderX = 0;
         this.renderY = 0;
@@ -264,6 +285,28 @@ class NetworkParser {
                     v.getAttribute("Name") || "",
                     v.getAttribute("Type") || "",
                     "output", "data"
+                ));
+            }
+        }
+
+        // Adapter sockets → input interface ports (in sidebar)
+        for (const section of iface.querySelectorAll("Sockets")) {
+            for (const adp of section.querySelectorAll("AdapterDeclaration")) {
+                model.interfacePorts.push(new InterfacePort(
+                    adp.getAttribute("Name") || "",
+                    adp.getAttribute("Type") || "",
+                    "input", "adapter"
+                ));
+            }
+        }
+
+        // Adapter plugs → output interface ports (in sidebar)
+        for (const section of iface.querySelectorAll("Plugs")) {
+            for (const adp of section.querySelectorAll("AdapterDeclaration")) {
+                model.interfacePorts.push(new InterfacePort(
+                    adp.getAttribute("Name") || "",
+                    adp.getAttribute("Type") || "",
+                    "output", "adapter"
                 ));
             }
         }
@@ -452,6 +495,8 @@ class TypeResolver {
             inst.plugs = iface.plugs || [];
             inst.sockets = iface.sockets || [];
             if (!inst.fbType) inst.fbType = iface.fbType || "BasicFB";
+            // Supplement with connection-referenced ports not in type definition
+            this._supplementFromConnections(inst, model);
             return;
         }
         this._inferFromConnections(inst, model);
@@ -597,7 +642,13 @@ class TypeResolver {
     _buildTypeString(varElem) {
         const baseType = varElem.getAttribute("Type") || "";
         const arraySize = varElem.getAttribute("ArraySize") || "";
-        if (arraySize) return `ARRAY [0..${parseInt(arraySize) - 1}] OF ${baseType}`;
+        if (arraySize) {
+            if (arraySize === "*") return `ARRAY [*] OF ${baseType}`;
+            if (arraySize.includes("..")) return `ARRAY [${arraySize}] OF ${baseType}`;
+            const n = parseInt(arraySize);
+            if (!isNaN(n)) return `ARRAY [0..${n - 1}] OF ${baseType}`;
+            return `ARRAY [${arraySize}] OF ${baseType}`;
+        }
         return baseType;
     }
 
@@ -638,6 +689,56 @@ class TypeResolver {
 
         if (!inst.fbType) inst.fbType = inst.isSubapp ? "SubApp" : "BasicFB";
     }
+
+    _supplementFromConnections(inst, model) {
+        // Handle mapped/renamed ports on SubApp instances.
+        // For each port category, if any connection-referenced port is missing
+        // from the type definition, replace that category with connection-inferred ports.
+        const connEI = [], connEO = [], connDI = [], connDO = [];
+
+        for (const conn of model.connections) {
+            const srcParts = conn.source.split(".");
+            const dstParts = conn.destination.split(".");
+
+            if (srcParts.length === 2 && srcParts[0] === inst.name) {
+                const portName = srcParts[1];
+                if (conn.connType === "event" && !connEO.includes(portName)) connEO.push(portName);
+                else if (conn.connType === "data" && !connDO.includes(portName)) connDO.push(portName);
+            }
+
+            if (dstParts.length === 2 && dstParts[0] === inst.name) {
+                const portName = dstParts[1];
+                if (conn.connType === "event" && !connEI.includes(portName)) connEI.push(portName);
+                else if (conn.connType === "data" && !connDI.includes(portName)) connDI.push(portName);
+            }
+        }
+
+        // For each category: if any connection port is missing from type def,
+        // replace that category with connection-inferred ports
+        const typeEI = new Set(inst.eventInputs.map(p => p.name));
+        const typeEO = new Set(inst.eventOutputs.map(p => p.name));
+        const typeDI = new Set(inst.dataInputs.map(p => p.name));
+        const typeDO = new Set(inst.dataOutputs.map(p => p.name));
+
+        if (connEI.some(n => !typeEI.has(n)))
+            inst.eventInputs = connEI.map(n => new Port(n, "Event"));
+        if (connEO.some(n => !typeEO.has(n)))
+            inst.eventOutputs = connEO.map(n => new Port(n, "Event"));
+        if (connDI.some(n => !typeDI.has(n)))
+            inst.dataInputs = connDI.map(n => new Port(n));
+        if (connDO.some(n => !typeDO.has(n)))
+            inst.dataOutputs = connDO.map(n => new Port(n));
+
+        // Add parameter ports not already present
+        const existingDI = new Set(inst.dataInputs.map(p => p.name));
+        const existingEI = new Set(inst.eventInputs.map(p => p.name));
+        for (const paramName of Object.keys(inst.parameters)) {
+            if (!paramName.startsWith("__") && !existingDI.has(paramName) && !existingEI.has(paramName)) {
+                inst.dataInputs.push(new Port(paramName));
+                existingDI.add(paramName);
+            }
+        }
+    }
 }
 
 // ===========================================================================
@@ -646,14 +747,19 @@ class TypeResolver {
 
 class NetworkLayoutEngine {
     constructor(settings = null) {
-        this.PORT_ROW_HEIGHT = 16;
+        // Visual lineHeight = 17 (TGL 0-17_std @ 12pt port-to-port spacing)
+        // Coordinate SCALE = 0.15 (Menlo-12 lineHeight=15: 15/100 = 0.15,
+        //   confirmed by retina measurement: all 9 pairwise Y-axis checks give exactly 0.15)
+        this.PORT_ROW_HEIGHT = 17;
         this.BLOCK_PADDING = 10;
-        this.NAME_SECTION_HEIGHT = 16;
+        this.NAME_SECTION_HEIGHT = 17;
+        this.BLOCK_MARGIN_PX = 2;        // SWT GridLayout margins: marginHeight=1 per section, net +2
+        this.INSTANCE_LABEL_HEIGHT = 15;  // Coordinate-system lineHeight (Menlo-12: 15px)
         this.TRIANGLE_WIDTH = 5;
         this.TRIANGLE_HEIGHT = 10;
         this.FONT_SIZE = 12;
         this.MARGIN = 60;  // Margin around the diagram for interface ports
-        this.SCALE = 0.16;  // 4diac canvas units → SVG pixels (100 % zoom)
+        this.SCALE = 0.15;  // 4diac canvas units → SVG pixels (lineHeight/100 = 15/100)
         this.settings = settings || new BlockSizeSettings();
 
         // Canvas for text measurement (browser only)
@@ -696,12 +802,16 @@ class NetworkLayoutEngine {
         const numDataRows = Math.max(numDI, numDO);
         const numAdapterRows = Math.max(numSK, numPL);
 
-        const sectionPadding = this.PORT_ROW_HEIGHT / 2 - 4;
-        inst.eventSectionHeight = numEventRows * this.PORT_ROW_HEIGHT + sectionPadding;
-        inst.dataSectionHeight = numDataRows > 0 ? numDataRows * this.PORT_ROW_HEIGHT + sectionPadding : 4;
+        // Visual block height matches SWT GridLayout preferred size:
+        //   (portRows + 1) * lineHeight + BLOCK_MARGIN_PX
+        // The +1 is for the notch/name section (one lineHeight).
+        // BLOCK_MARGIN_PX (2) comes from SWT GridLayout margins.
+        inst.eventSectionHeight = numEventRows * this.PORT_ROW_HEIGHT;
+        inst.dataSectionHeight = numDataRows > 0 ? numDataRows * this.PORT_ROW_HEIGHT : 0;
         inst.adapterSectionHeight = numAdapterRows > 0 ? numAdapterRows * this.PORT_ROW_HEIGHT : 0;
 
-        inst.blockHeight = inst.eventSectionHeight + this.NAME_SECTION_HEIGHT + inst.dataSectionHeight + inst.adapterSectionHeight;
+        const portRows = numEventRows + numDataRows + numAdapterRows;
+        inst.blockHeight = (portRows + 1) * this.PORT_ROW_HEIGHT + this.BLOCK_MARGIN_PX;
 
         let shortType = inst.typeName.includes("::") ? inst.typeName.split("::").pop() : inst.typeName;
         shortType = _truncateLabel(shortType, this.settings.maxTypeLabelSize);
@@ -712,8 +822,8 @@ class NetworkLayoutEngine {
         const typeWidth = this._measureText(shortType, true);
         const typeSectionW = notch + 1 + iconW + gapIconText + typeWidth + 5 + notch;
 
-        const triSpace = this.TRIANGLE_WIDTH + 3 + 1.5;
-        const adpSpace = this.TRIANGLE_WIDTH * 2 + 3 + 1.5;
+        const triSpace = this.TRIANGLE_WIDTH + 1 + 1.5;
+        const adpSpace = this.TRIANGLE_WIDTH * 2 + 1 + 1.5;
 
         const minPinW = this.settings.minPinLabelSize > 0 ? this._measureText("W".repeat(this.settings.minPinLabelSize)) : 0;
 
@@ -737,6 +847,11 @@ class NetworkLayoutEngine {
         const portsWidth = maxLeft + minCenterGap + maxRight;
 
         inst.blockWidth = Math.max(typeSectionW, portsWidth);
+
+        // Figure width includes the instance name label (may be wider than block)
+        const instanceNameWidth = this._measureText(inst.name, false) + 4;
+        inst.figureWidth = Math.max(instanceNameWidth, inst.blockWidth);
+
         inst.nameSectionTop = inst.eventSectionHeight;
         inst.nameSectionBottom = inst.eventSectionHeight + this.NAME_SECTION_HEIGHT;
         inst.adapterSectionTop = inst.nameSectionBottom + inst.dataSectionHeight;
@@ -748,9 +863,14 @@ class NetworkLayoutEngine {
         const minX = Math.min(...model.instances.map(i => i.x));
         const minY = Math.min(...model.instances.map(i => i.y));
 
+        // In 4diac IDE, (x, y) is the top-left of the entire figure including
+        // the instance name label above the block body.  Offset render positions
+        // so render_x/render_y point to the block body top-left.
         for (const inst of model.instances) {
             inst.renderX = (inst.x - minX) * this.SCALE + this.MARGIN;
+            inst.renderX += (inst.figureWidth - inst.blockWidth) / 2;
             inst.renderY = (inst.y - minY) * this.SCALE + this.MARGIN;
+            inst.renderY += this.INSTANCE_LABEL_HEIGHT;
         }
 
         // Store the mapping from canvas origin (0, 0) to pixel coordinates.
@@ -759,17 +879,15 @@ class NetworkLayoutEngine {
     }
 
     _computePortPositions(inst) {
-        const topPadding = this.PORT_ROW_HEIGHT / 2 - 4;
-
-        // Event inputs
-        let y = this.PORT_ROW_HEIGHT / 2 + topPadding;
+        // Event inputs – centered in each row
+        let y = this.PORT_ROW_HEIGHT / 2;
         for (const p of inst.eventInputs) {
             inst.portPositions[p.name] = [inst.renderX, inst.renderY + y];
             y += this.PORT_ROW_HEIGHT;
         }
 
         // Event outputs
-        y = this.PORT_ROW_HEIGHT / 2 + topPadding;
+        y = this.PORT_ROW_HEIGHT / 2;
         for (const p of inst.eventOutputs) {
             inst.portPositions[p.name] = [inst.renderX + inst.blockWidth, inst.renderY + y];
             y += this.PORT_ROW_HEIGHT;
@@ -815,18 +933,27 @@ class NetworkLayoutEngine {
         const inputs = model.interfacePorts.filter(p => p.direction === "input");
         const outputs = model.interfacePorts.filter(p => p.direction === "output");
 
-        // Measure sidebar widths: text + gap + triangle, minimal outer margin
-        const sidebarOuterMargin = 2;
-        const sidebarGap = 3;
+        // Measure sidebar widths: text + gap + symbol, minimal outer margin
+        const sidebarOuterMargin = 1;   // 1px margin at outer border edge
+        const sidebarGap = 1;           // 1px gap between text and symbol
         const triW = this.TRIANGLE_WIDTH;
+        const adapterSymW = this.TRIANGLE_WIDTH * 2;  // adapter socket/plug symbol is wider
         const maxIface = this.settings.maxInterfaceBarSize;
         let inputSidebarW = 0;
-        for (const p of inputs) inputSidebarW = Math.max(inputSidebarW, this._measureText(_truncateLabel(p.name, maxIface)));
-        if (inputs.length) inputSidebarW += sidebarOuterMargin + sidebarGap + triW;
+        let inputSymW = triW;  // track widest symbol needed
+        for (const p of inputs) {
+            inputSidebarW = Math.max(inputSidebarW, this._measureText(_truncateLabel(p.name, maxIface)));
+            if (p.category === "adapter") inputSymW = Math.max(inputSymW, adapterSymW);
+        }
+        if (inputs.length) inputSidebarW += sidebarOuterMargin + sidebarGap + inputSymW;
 
         let outputSidebarW = 0;
-        for (const p of outputs) outputSidebarW = Math.max(outputSidebarW, this._measureText(_truncateLabel(p.name, maxIface)));
-        if (outputs.length) outputSidebarW += sidebarOuterMargin + sidebarGap + triW;
+        let outputSymW = triW;
+        for (const p of outputs) {
+            outputSidebarW = Math.max(outputSidebarW, this._measureText(_truncateLabel(p.name, maxIface)));
+            if (p.category === "adapter") outputSymW = Math.max(outputSymW, adapterSymW);
+        }
+        if (outputs.length) outputSidebarW += sidebarOuterMargin + sidebarGap + outputSymW;
 
         // Clamp sidebar widths to min interface bar size
         const minIfaceW = this.settings.minInterfaceBarSize > 0 ? this._measureText("W".repeat(this.settings.minInterfaceBarSize)) : 0;
@@ -845,7 +972,7 @@ class NetworkLayoutEngine {
         if (model.instances.length) {
             instMinX = Math.min(...model.instances.map(i => i.renderX));
             instMaxX = Math.max(...model.instances.map(i => i.renderX + i.blockWidth));
-            instMinY = Math.min(...model.instances.map(i => i.renderY - 20));
+            instMinY = Math.min(...model.instances.map(i => i.renderY - this.INSTANCE_LABEL_HEIGHT - 4));
             instMaxY = Math.max(...model.instances.map(i => i.renderY + i.blockHeight));
         } else {
             instMinX = this.MARGIN; instMaxX = this.MARGIN + 200;
@@ -879,14 +1006,50 @@ class NetworkLayoutEngine {
                 }
             }
         }
-        const sidebarPaddingLeft = 58;
+        const sidebarPaddingLeft = 20;
         const sidebarGapLeft = maxTurnOffset + sidebarPaddingLeft;
-        const inputSidebarRight = instMinX - sidebarGapLeft;
+        let inputSidebarRight = instMinX - sidebarGapLeft;
+
+        // Check if any connection turn points from the sidebar would overshoot
+        // past their destination FB.  Shift all instances right if needed.
+        let maxOvershoot = 0;
+        for (const conn of model.connections) {
+            const srcParts = conn.source.split(".");
+            if (srcParts.length === 1 && inputPortNames.has(srcParts[0]) && conn.dx1 !== 0) {
+                const dx1Px = conn.dx1 * this.SCALE;
+                const dstParts = conn.destination.split(".");
+                if (dstParts.length === 2) {
+                    const dstInst = instanceMapTmp[dstParts[0]];
+                    if (dstInst) {
+                        const turnX = inputSidebarRight + dx1Px;
+                        const overshoot = turnX - dstInst.renderX;
+                        if (overshoot > 0) {
+                            maxOvershoot = Math.max(maxOvershoot, overshoot);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (maxOvershoot > 0) {
+            const shift = maxOvershoot + 91;
+            for (const inst of model.instances) {
+                inst.renderX += shift;
+                for (const pname in inst.portPositions) {
+                    inst.portPositions[pname][0] += shift;
+                }
+            }
+            instMinX += shift;
+            instMaxX += shift;
+            model.canvasOriginX += shift;
+        }
+
         const inputSidebarLeft = inputSidebarRight - inputSidebarW;
 
         // --- Output (right) sidebar positioning ---
-        // Mirror of left-side logic: find max turn-point offset rightward from
-        // inst_max_x, filtering out connections that route far back into the network.
+        // Find the max turn-point offset (rightward from inst_max_x)
+        // for FB→interface connections whose turn point extends past the
+        // rightmost FB edge.
         let maxRightTurnOffset = 0;
         for (const conn of model.connections) {
             const dstParts = conn.destination.split(".");
@@ -902,11 +1065,7 @@ class NetworkLayoutEngine {
                             const turnX = srcX + dx1Px;
                             const offsetFromRight = turnX - instMaxX;
                             if (offsetFromRight > 0) {
-                                const srcRight = srcInst.renderX + srcInst.blockWidth;
-                                const distSrcToLeft = srcRight - instMinX;
-                                if (dx1Px <= distSrcToLeft * 0.5) {
-                                    maxRightTurnOffset = Math.max(maxRightTurnOffset, offsetFromRight);
-                                }
+                                maxRightTurnOffset = Math.max(maxRightTurnOffset, offsetFromRight);
                             }
                         }
                     }
@@ -917,8 +1076,8 @@ class NetworkLayoutEngine {
         const sidebarGapRight = maxRightTurnOffset + sidebarPaddingRight;
         const outputSidebarLeft = instMaxX + sidebarGapRight;
 
-        const sidebarRowH = 17; // spacing for sidebar port names
-        const topPad = sidebarRowH * 1.0; // space above first port
+        const sidebarRowH = 17; // spacing for sidebar port names (= lineHeight for TGL 0-17 @ 12pt)
+        const topPad = 29; // space above first port: int(lineHeight * 1.75) = int(17 * 1.75)
         let sidebarTop = instMinY - 58;
 
         let inputSidebarH = inputs.length ? (inputs.length * sidebarRowH + topPad) : 0;
@@ -948,14 +1107,16 @@ class NetworkLayoutEngine {
     }
 
     _computeHeaderAndBorder(model) {
-        const HEADER_HEIGHT = 25;
+        const HEADER_HEIGHT = 25; // Height of the header bar (margin + text + margin)
 
+        // Determine the full horizontal and vertical extent (sidebars + instances)
         const allX = [];
         const allY = [];
 
+        const labelAbove = this.INSTANCE_LABEL_HEIGHT + 4; // label height + padding
         for (const inst of model.instances) {
             allX.push(inst.renderX, inst.renderX + inst.blockWidth);
-            allY.push(inst.renderY - 20, inst.renderY + inst.blockHeight);
+            allY.push(inst.renderY - labelAbove, inst.renderY + inst.blockHeight);
         }
 
         if (model.inputSidebarRect) {
@@ -972,11 +1133,53 @@ class NetworkLayoutEngine {
         if (allX.length === 0) return;
 
         const contentLeft = Math.min(...allX);
-        const contentRight = Math.max(...allX);
+        let contentRight = Math.max(...allX);
         const contentTop = Math.min(...allY);
-        const contentBottom = Math.max(...allY);
+        let contentBottom = Math.max(...allY);
 
-        const borderPadV = 40; // vertical padding (top/bottom)
+        const borderPadV = 120; // vertical padding (top/bottom) between content extent and header/border
+
+        // 4diac IDE enforces a minimum network area size (2224×1148 retina → 1112×574 CSS px).
+        // This is the INNER area between sidebars and below the header.
+        const MIN_NETWORK_WIDTH = 1112;
+        const MIN_NETWORK_HEIGHT = 574;
+
+        // Compute the inner network area (between sidebar edges)
+        const inputSW = model.inputSidebarRect ? model.inputSidebarRect.w : 0;
+        const outputSW = model.outputSidebarRect ? model.outputSidebarRect.w : 0;
+        const networkLeft = contentLeft + inputSW;
+        const networkRight = contentRight - outputSW;
+        const networkW = networkRight - networkLeft;
+        const networkH = contentBottom - contentTop + 2 * borderPadV + 25;
+
+        if (networkW < MIN_NETWORK_WIDTH) {
+            const extra = MIN_NETWORK_WIDTH - networkW;
+            const shiftX = extra / 2;
+            // Center FB instances within the expanded network area
+            for (const inst of model.instances) {
+                inst.renderX += shiftX;
+                for (const pname in inst.portPositions) {
+                    inst.portPositions[pname][0] += shiftX;
+                }
+            }
+            model.canvasOriginX = (model.canvasOriginX || 0) + shiftX;
+            // Expand contentRight to accommodate the wider network area + output sidebar
+            contentRight = contentLeft + inputSW + MIN_NETWORK_WIDTH + outputSW;
+            // Reposition output sidebar to the new right edge
+            if (model.outputSidebarRect) {
+                const sw = model.outputSidebarRect.w;
+                model.outputSidebarRect.x = contentRight - sw;
+                for (const ip of model.interfacePorts) {
+                    if (ip.direction === "output") {
+                        ip.renderX = contentRight - sw;
+                    }
+                }
+            }
+        }
+        if (networkH < MIN_NETWORK_HEIGHT) {
+            const extra = MIN_NETWORK_HEIGHT - networkH;
+            contentBottom += extra;
+        }
 
         // Sidebars form the left/right edges of the border — no extra padding
         const borderX = contentLeft;
@@ -1009,7 +1212,7 @@ class NetworkLayoutEngine {
         // Reposition interface port labels relative to header_bottom so they
         // stay near the top of the sidebar regardless of border_pad_v.
         const sidebarRowH2 = 17;
-        const labelTopPad = 37; // gap from header separator to first label
+        const labelTopPad = 35; // gap from header separator to first label
         const inputs2 = model.interfacePorts.filter(p => p.direction === 'input');
         const outputs2 = model.interfacePorts.filter(p => p.direction === 'output');
         inputs2.forEach((port, i) => {
@@ -1064,7 +1267,7 @@ class NetworkLayoutEngine {
 
 class ConnectionRouter {
     constructor() {
-        this.SCALE = 0.16;  // Must match layout engine scale
+        this.SCALE = 0.15;  // Must match layout engine scale
     }
 
     route(conn, model, instanceMap, interfaceMap) {
@@ -1244,12 +1447,12 @@ class NetworkSVGRenderer {
 
         this.BLOCK_STROKE_COLOR = "#A0A0A0";
         this.EVENT_PORT_COLOR = "#63B31F";
-        this.BOOL_PORT_COLOR = "#9FA48A";
+        this.BOOL_PORT_COLOR = "#A3B08F";
         this.ANY_BIT_PORT_COLOR = "#82A3A9";
         this.ANY_INT_PORT_COLOR = "#18519E";
         this.ANY_REAL_PORT_COLOR = "#DBB418";
         this.STRING_PORT_COLOR = "#BD8663";
-        this.DATA_PORT_COLOR = "#0000FF";
+        this.DATA_PORT_COLOR = "#3366FF";
         this.ADAPTER_PORT_COLOR = "#845DAF";
 
         this.STRING_TYPES = new Set(["STRING", "WSTRING", "ANY_STRING", "ANY_CHARS", "CHAR", "WCHAR"]);
@@ -1257,7 +1460,19 @@ class NetworkSVGRenderer {
         this.REAL_TYPES = new Set(["REAL", "LREAL", "ANY_REAL"]);
         this.BIT_TYPES = new Set(["BYTE", "WORD", "DWORD", "LWORD", "ANY_BIT"]);
 
-        this.PORT_ROW_HEIGHT = 16;
+        this.ANY_TYPES = new Set(["ANY", "ANY_ELEMENTARY", "ANY_MAGNITUDE",
+            "ANY_NUM", "ANY_REAL", "ANY_INT", "ANY_BIT", "ANY_STRING",
+            "ANY_CHARS", "ANY_DATE", "ANY_DURATION", "ANY_STRUCT"]);
+
+        // All primitive IEC 61499 types (non-struct)
+        this.PRIMITIVE_TYPES = new Set([
+            ...this.STRING_TYPES, ...this.INT_TYPES, ...this.REAL_TYPES,
+            ...this.BIT_TYPES, ...this.ANY_TYPES,
+            "BOOL", "Event", "TIME", "LTIME", "DATE", "LDATE",
+            "TIME_OF_DAY", "LTOD", "DATE_AND_TIME", "LDT"
+        ]);
+
+        this.PORT_ROW_HEIGHT = 17;
         this.TRIANGLE_WIDTH = 5;
         this.TRIANGLE_HEIGHT = 10;
         this.CONN_DIAG_LEN = 4;
@@ -1316,22 +1531,68 @@ class NetworkSVGRenderer {
         if (conn.connType === "event") return this.EVENT_PORT_COLOR;
         if (conn.connType === "adapter") return this.ADAPTER_PORT_COLOR;
 
-        const ANY_TYPES = new Set(["ANY", "ANY_ELEMENTARY", "ANY_MAGNITUDE",
-            "ANY_NUM", "ANY_REAL", "ANY_INT", "ANY_BIT", "ANY_STRING",
-            "ANY_CHARS", "ANY_DATE", "ANY_DURATION", "ANY_STRUCT"]);
-
         const srcType = this._resolvePortType(conn.source, model, instanceMap);
-        if (srcType && !ANY_TYPES.has(srcType)) {
+        if (srcType && !this.ANY_TYPES.has(srcType)) {
             return this._getPortColor(srcType);
         }
         // Source is generic/unknown — try destination type
         const dstType = this._resolvePortType(conn.destination, model, instanceMap);
-        if (dstType && !ANY_TYPES.has(dstType)) {
+        if (dstType && !this.ANY_TYPES.has(dstType)) {
             return this._getPortColor(dstType);
         }
         // Both generic — use source color if available, else fallback
         if (srcType) return this._getPortColor(srcType);
         return this.DATA_PORT_COLOR;
+    }
+
+    _lighterColor(hexColor) {
+        // Compute a lighter variant of a hex color (4diac HSL lightness * 1.667)
+        const hex = hexColor.replace("#", "");
+        const r = parseInt(hex.substring(0, 2), 16) / 255;
+        const g = parseInt(hex.substring(2, 4), 16) / 255;
+        const b = parseInt(hex.substring(4, 6), 16) / 255;
+        const cmax = Math.max(r, g, b), cmin = Math.min(r, g, b);
+        const delta = cmax - cmin;
+        let l = (cmax + cmin) / 2;
+        let h = 0, s = 0;
+        if (delta !== 0) {
+            s = delta / (1 - Math.abs(2 * l - 1));
+            if (cmax === r) h = 60 * (((g - b) / delta) % 6);
+            else if (cmax === g) h = 60 * ((b - r) / delta + 2);
+            else h = 60 * ((r - g) / delta + 4);
+            if (h < 0) h += 360;
+        }
+        l = Math.min(0.9, l * (1.0 / 0.6)); // cap at 0.9 to avoid pure white in SVG
+        const c = (1 - Math.abs(2 * l - 1)) * s;
+        const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+        const m = l - c / 2;
+        let r1, g1, b1;
+        if (h < 60) { r1 = c; g1 = x; b1 = 0; }
+        else if (h < 120) { r1 = x; g1 = c; b1 = 0; }
+        else if (h < 180) { r1 = 0; g1 = c; b1 = x; }
+        else if (h < 240) { r1 = 0; g1 = x; b1 = c; }
+        else if (h < 300) { r1 = x; g1 = 0; b1 = c; }
+        else { r1 = c; g1 = 0; b1 = x; }
+        const ro = Math.min(255, Math.round((r1 + m) * 255));
+        const go = Math.min(255, Math.round((g1 + m) * 255));
+        const bo = Math.min(255, Math.round((b1 + m) * 255));
+        return `#${ro.toString(16).padStart(2, "0").toUpperCase()}${go.toString(16).padStart(2, "0").toUpperCase()}${bo.toString(16).padStart(2, "0").toUpperCase()}`;
+    }
+
+    _isStructType(portType) {
+        if (!portType) return false;
+        return !this.PRIMITIVE_TYPES.has(portType);
+    }
+
+    _isDoubleLineConnection(conn, model, instanceMap) {
+        if (conn.connType === "adapter") return true;
+        if (conn.connType === "data") {
+            const srcType = this._resolvePortType(conn.source, model, instanceMap);
+            if (this._isStructType(srcType)) return true;
+            const dstType = this._resolvePortType(conn.destination, model, instanceMap);
+            if (this._isStructType(dstType)) return true;
+        }
+        return false;
     }
 
     render(model, layout) {
@@ -1369,8 +1630,8 @@ class NetworkSVGRenderer {
             const h = model.headerRect;
             // Header background
             parts.push(`  <rect x="${h.x.toFixed(1)}" y="${h.y.toFixed(1)}" width="${h.w.toFixed(1)}" height="${h.h.toFixed(1)}" fill="white" stroke="none"/>`);
-            // Separator line
-            const sepY = h.y + h.h;
+            // Separator line (inside the header area, above sidebar start)
+            const sepY = h.y + h.h - 0.5;
             parts.push(`  <line x1="${h.x.toFixed(1)}" y1="${sepY.toFixed(1)}" x2="${(h.x + h.w).toFixed(1)}" y2="${sepY.toFixed(1)}" stroke="${this.BLOCK_STROKE_COLOR}" stroke-width="1"/>`);
             // Comment text
             if (model.comment) {
@@ -1381,7 +1642,7 @@ class NetworkSVGRenderer {
                     .replace(/</g, "&lt;")
                     .replace(/>/g, "&gt;")
                     .replace(/"/g, "&quot;");
-                parts.push(`  <text x="${textX.toFixed(1)}" y="${textY.toFixed(1)}" font-family="${this.FONT_FAMILY}" font-size="${this.FONT_SIZE}" fill="#333333">${commentText}</text>`);
+                parts.push(`  <text x="${textX.toFixed(1)}" y="${textY.toFixed(1)}" font-family="${this.FONT_FAMILY}" font-size="${this.FONT_SIZE}" font-weight="bold" fill="#333333">${commentText}</text>`);
             }
         }
 
@@ -1479,7 +1740,8 @@ class NetworkSVGRenderer {
             const waypoints = router.route(conn, model, instanceMap, interfaceMap);
             if (waypoints.length > 0) {
                 const color = this._getConnectionColor(conn, model, instanceMap);
-                parts.push(this._renderConnection(waypoints, color));
+                const doubleLine = this._isDoubleLineConnection(conn, model, instanceMap);
+                parts.push(this._renderConnection(waypoints, color, doubleLine));
             }
         }
         parts.push('  </g>');
@@ -1567,7 +1829,7 @@ class NetworkSVGRenderer {
     }
 
     _renderNameSection(inst) {
-        const centerY = inst.nameSectionTop + 16 / 2;
+        const centerY = inst.nameSectionTop + (inst.nameSectionBottom - inst.nameSectionTop) / 2;
         const w = inst.blockWidth;
         const shortType = _truncateLabel(inst.typeName.includes("::") ? inst.typeName.split("::").pop() : inst.typeName, this.settings.maxTypeLabelSize);
 
@@ -1652,15 +1914,14 @@ class NetworkSVGRenderer {
 
     _renderEventPorts(inst) {
         const parts = [];
-        const topPadding = this.PORT_ROW_HEIGHT / 2 - 4;
-
-        let y = this.PORT_ROW_HEIGHT / 2 + topPadding;
+        // Event inputs – centered in each row
+        let y = this.PORT_ROW_HEIGHT / 2;
         for (const p of inst.eventInputs) {
             parts.push(this._renderPortLeft(p, y, this.EVENT_PORT_COLOR));
             y += this.PORT_ROW_HEIGHT;
         }
 
-        y = this.PORT_ROW_HEIGHT / 2 + topPadding;
+        y = this.PORT_ROW_HEIGHT / 2;
         for (const p of inst.eventOutputs) {
             parts.push(this._renderPortRight(p, y, inst.blockWidth, this.EVENT_PORT_COLOR));
             y += this.PORT_ROW_HEIGHT;
@@ -1692,12 +1953,11 @@ class NetworkSVGRenderer {
         if (!inst.parameters || Object.keys(inst.parameters).length === 0) return "";
 
         const parts = [];
-        const topPadding = this.PORT_ROW_HEIGHT / 2 - 4;
 
         // Build port name → local y lookup for all input ports
         const portYMap = {};
         // Event inputs
-        let y = this.PORT_ROW_HEIGHT / 2 + topPadding;
+        let y = this.PORT_ROW_HEIGHT / 2;
         for (const p of inst.eventInputs) {
             portYMap[p.name] = y;
             y += this.PORT_ROW_HEIGHT;
@@ -1758,7 +2018,7 @@ class NetworkSVGRenderer {
         const triY = y;
         const triX = 0;  // base aligned with left FB border
         const triPts = `${triX},${triY - th/2} ${triX + tw},${triY} ${triX},${triY + th/2}`;
-        const textX = triX + tw + 3;
+        const textX = triX + tw + 1;
         const textY = y + this.FONT_SIZE * 0.35;
         const displayName = _truncateLabel(port.name, this.settings.maxPinLabelSize);
         return `      <polygon points="${triPts}" fill="${color}"/>
@@ -1774,7 +2034,7 @@ class NetworkSVGRenderer {
         const textY = y + this.FONT_SIZE * 0.35;
         const displayName = _truncateLabel(port.name, this.settings.maxPinLabelSize);
         return `      <polygon points="${triPts}" fill="${color}"/>
-      <text x="${triX - 3}" y="${textY}" font-family="${this.FONT_FAMILY}" font-size="${this.FONT_SIZE}"
+      <text x="${triX - 1}" y="${textY}" font-family="${this.FONT_FAMILY}" font-size="${this.FONT_SIZE}"
             fill="#000000" text-anchor="end">${displayName}</text>`;
     }
 
@@ -1840,7 +2100,7 @@ class NetworkSVGRenderer {
         return result;
     }
 
-    _renderConnection(waypoints, color) {
+    _renderConnection(waypoints, color, doubleLine = false) {
         if (waypoints.length < 2) return "";
 
         // Apply bevels at direction changes
@@ -1848,6 +2108,12 @@ class NetworkSVGRenderer {
 
         const pts = beveled.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
 
+        if (doubleLine) {
+            const lighter = this._lighterColor(color);
+            const outer = `    <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="3" stroke-linejoin="round"/>`;
+            const inner = `    <polyline points="${pts}" fill="none" stroke="${lighter}" stroke-width="1" stroke-linejoin="round"/>`;
+            return outer + "\n" + inner;
+        }
         return `    <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round"/>`;
     }
 
@@ -1860,25 +2126,86 @@ class NetworkSVGRenderer {
         else color = this._getPortColor(ip.portType);
 
         const tw = this.TRIANGLE_WIDTH, th = this.TRIANGLE_HEIGHT;
-        let triPts, textX, textAnchor, stub;
+        const textY = y + this.FONT_SIZE * 0.35;
+        const displayName = _truncateLabel(ip.name, this.settings.maxInterfaceBarSize);
+
+        // Adapter ports use socket/plug symbols
+        if (ip.category === "adapter") {
+            return this._renderInterfaceAdapterPort(ip, x, y, textY, displayName);
+        }
+
+        let triPts, textX, textAnchor;
 
         if (ip.direction === "input") {
-            // Triangle pointing right, entirely inside the sidebar
-            const triX = x - tw;  // triangle base inside sidebar
+            const triX = x - tw;
             triPts = `${triX},${y - th/2} ${x},${y} ${triX},${y + th/2}`;
-            textX = triX - 3;
+            textX = triX - 1;
             textAnchor = "end";
         } else {
-            // Triangle pointing left, entirely inside the sidebar
-            const triX = x + tw;  // triangle base inside sidebar
+            const triX = x + tw;
             triPts = `${triX},${y - th/2} ${x},${y} ${triX},${y + th/2}`;
-            textX = triX + 3;
+            textX = triX + 1;
             textAnchor = "start";
         }
 
-        const textY = y + this.FONT_SIZE * 0.35;  // vertically center text with triangle
-        const displayName = _truncateLabel(ip.name, this.settings.maxInterfaceBarSize);
         return `    <polygon points="${triPts}" fill="${color}"/>
+    <text x="${textX}" y="${textY.toFixed(1)}" font-family="${this.FONT_FAMILY}" font-size="${this.FONT_SIZE}"
+          fill="#000000" text-anchor="${textAnchor}">${displayName}</text>`;
+    }
+
+    _renderInterfaceAdapterPort(ip, x, y, textY, displayName) {
+        const rectW = this.TRIANGLE_WIDTH * 2;
+        const rectH = this.TRIANGLE_HEIGHT;
+        const color = this.ADAPTER_PORT_COLOR;
+        let rectX, rectY, notchStart, notchWidth, notchDepth, pathD, textX, textAnchor, fill, stroke;
+
+        if (ip.direction === "input") {
+            // Socket symbol at right edge of input sidebar (filled, mirrored)
+            rectX = x - rectW;
+            rectY = y - rectH / 2;
+            notchStart = rectX + rectW / 4;
+            notchWidth = rectW / 4;
+            notchDepth = rectH / 6;
+            pathD = `M ${rectX} ${rectY} L ${notchStart} ${rectY} `
+                  + `L ${notchStart} ${rectY + notchDepth} `
+                  + `L ${notchStart + notchWidth} ${rectY + notchDepth} `
+                  + `L ${notchStart + notchWidth} ${rectY} `
+                  + `L ${rectX + rectW} ${rectY} `
+                  + `L ${rectX + rectW} ${rectY + rectH} `
+                  + `L ${notchStart + notchWidth} ${rectY + rectH} `
+                  + `L ${notchStart + notchWidth} ${rectY + rectH - notchDepth} `
+                  + `L ${notchStart} ${rectY + rectH - notchDepth} `
+                  + `L ${notchStart} ${rectY + rectH} `
+                  + `L ${rectX} ${rectY + rectH} Z`;
+            textX = rectX - 3;
+            textAnchor = "end";
+            fill = color;
+            stroke = "";
+        } else {
+            // Plug symbol at left edge of output sidebar (outline, mirrored)
+            rectX = x;
+            rectY = y - rectH / 2;
+            notchStart = rectX + rectW / 2;
+            notchWidth = rectW / 4;
+            notchDepth = rectH / 6;
+            pathD = `M ${rectX} ${rectY} L ${notchStart} ${rectY} `
+                  + `L ${notchStart} ${rectY + notchDepth} `
+                  + `L ${notchStart + notchWidth} ${rectY + notchDepth} `
+                  + `L ${notchStart + notchWidth} ${rectY} `
+                  + `L ${rectX + rectW} ${rectY} `
+                  + `L ${rectX + rectW} ${rectY + rectH} `
+                  + `L ${notchStart + notchWidth} ${rectY + rectH} `
+                  + `L ${notchStart + notchWidth} ${rectY + rectH - notchDepth} `
+                  + `L ${notchStart} ${rectY + rectH - notchDepth} `
+                  + `L ${notchStart} ${rectY + rectH} `
+                  + `L ${rectX} ${rectY + rectH} Z`;
+            textX = rectX + rectW + 3;
+            textAnchor = "start";
+            fill = "none";
+            stroke = ` stroke="${color}" stroke-width="1"`;
+        }
+
+        return `    <path d="${pathD}" fill="${fill}"${stroke}/>
     <text x="${textX}" y="${textY.toFixed(1)}" font-family="${this.FONT_FAMILY}" font-size="${this.FONT_SIZE}"
           fill="#000000" text-anchor="${textAnchor}">${displayName}</text>`;
     }
@@ -1956,6 +2283,14 @@ if (typeof module !== 'undefined' && module.exports) {
             try { options.settingsIni = fs.readFileSync(defaultSettings, 'utf-8'); } catch (e) {}
         }
 
+        // Merge type library paths: INI defaults + CLI --type-lib arguments
+        const settings = options.settingsIni ? loadBlockSizeSettings(options.settingsIni) : new BlockSizeSettings();
+        const iniTypeLibPaths = settings.typeLibPaths || [];
+        for (const p of typeLibPaths) {
+            if (!iniTypeLibPaths.includes(p)) iniTypeLibPaths.push(p);
+        }
+        typeLibPaths = iniTypeLibPaths;
+
         if (!outputFile) {
             outputFile = inputFile.replace(/\.(fbt|sub|sys)$/i, '.network.svg');
         }
@@ -2010,6 +2345,7 @@ if (typeof module !== 'undefined' && module.exports) {
             }
 
             options.typeLibXmls = typeLibXmls;
+            options.settings = settings;
             const svg = convertNetworkToSvg(xmlContent, options);
             fs.writeFileSync(outputFile, svg, 'utf-8');
             console.log(`SVG written to: ${outputFile}`);

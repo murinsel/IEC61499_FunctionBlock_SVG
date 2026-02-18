@@ -268,12 +268,12 @@ class SVGRenderer {
         // Colors (from 4diac IDE plugin.xml)
         this.BLOCK_STROKE_COLOR = "#A0A0A0";
         this.EVENT_PORT_COLOR = "#63B31F";    // (99,179,31)
-        this.BOOL_PORT_COLOR = "#9FA48A";     // (159,164,138)
+        this.BOOL_PORT_COLOR = "#A3B08F";     // (163,176,143)
         this.ANY_BIT_PORT_COLOR = "#82A3A9";  // (130,163,169)
         this.ANY_INT_PORT_COLOR = "#18519E";  // (24,81,158)
         this.ANY_REAL_PORT_COLOR = "#DBB418";  // (219,180,24)
         this.STRING_PORT_COLOR = "#BD8663";   // (189,134,99)
-        this.DATA_PORT_COLOR = "#0000FF";     // (0,0,255)
+        this.DATA_PORT_COLOR = "#3366FF";     // (51,102,255)
         this.ADAPTER_PORT_COLOR = "#845DAF";  // (132,93,175)
 
         // Type name sets for color mapping

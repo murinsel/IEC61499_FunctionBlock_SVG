@@ -42,6 +42,12 @@ class BlockSizeSettings:
     # Block margins (in pixels)
     margin_top_bottom: int = 0
     margin_left_right: int = 0
+    # Type library root directories (from INI file)
+    type_lib_paths: list = None
+
+    def __post_init__(self):
+        if self.type_lib_paths is None:
+            self.type_lib_paths = []
 
 
 def load_block_size_settings(path: str = None) -> BlockSizeSettings:
@@ -50,6 +56,7 @@ def load_block_size_settings(path: str = None) -> BlockSizeSettings:
     Falls back to defaults if file not found or on parse error.
     """
     settings = BlockSizeSettings()
+    settings.type_lib_paths = []
     if path is None:
         # Look for block_size_settings.ini next to this script
         path = str(Path(__file__).parent / "block_size_settings.ini")
@@ -71,6 +78,14 @@ def load_block_size_settings(path: str = None) -> BlockSizeSettings:
             settings.margin_top_bottom = int(section["top_bottom"])
         if "left_right" in section:
             settings.margin_left_right = int(section["left_right"])
+    if "TypeLibrary" in cp:
+        section = cp["TypeLibrary"]
+        # Read path, path2, path3, ... entries
+        for key in sorted(section.keys()):
+            if key.startswith("path"):
+                p = section[key].strip()
+                if p:
+                    settings.type_lib_paths.append(p)
     return settings
 
 
@@ -142,6 +157,7 @@ class FBInstance:
 
     # Computed layout fields
     block_width: float = 0
+    figure_width: float = 0      # max(instance_name_width, block_width)
     block_height: float = 0
     render_x: float = 0         # Final rendered x position
     render_y: float = 0         # Final rendered y position
@@ -323,6 +339,26 @@ class NetworkParser:
                     port_type=var.get("Type", ""),
                     direction="output",
                     category="data"
+                ))
+
+        # Adapter sockets → input interface ports (in sidebar)
+        for section in iface.findall("Sockets"):
+            for adp in section.findall("AdapterDeclaration"):
+                model.interface_ports.append(InterfacePort(
+                    name=adp.get("Name", ""),
+                    port_type=adp.get("Type", ""),
+                    direction="input",
+                    category="adapter"
+                ))
+
+        # Adapter plugs → output interface ports (in sidebar)
+        for section in iface.findall("Plugs"):
+            for adp in section.findall("AdapterDeclaration"):
+                model.interface_ports.append(InterfacePort(
+                    name=adp.get("Name", ""),
+                    port_type=adp.get("Type", ""),
+                    direction="output",
+                    category="adapter"
                 ))
 
     def _parse_fbtype_interface(self, iface: ET.Element, model: NetworkModel):
@@ -524,6 +560,9 @@ class TypeResolver:
             inst.sockets = iface.get('sockets', [])
             if not inst.fb_type:
                 inst.fb_type = iface.get('fb_type', 'BasicFB')
+            # Supplement with connection-referenced ports not in type definition
+            # (handles mapped/renamed ports on SubApp instances)
+            self._supplement_from_connections(inst, model)
             return
 
         # Tier 2: Connection inference
@@ -681,7 +720,15 @@ class TypeResolver:
         base_type = var_elem.get("Type", "")
         array_size = var_elem.get("ArraySize", "")
         if array_size:
-            return f"ARRAY [0..{int(array_size)-1}] OF {base_type}"
+            if array_size == "*":
+                return f"ARRAY [*] OF {base_type}"
+            elif ".." in array_size:
+                return f"ARRAY [{array_size}] OF {base_type}"
+            else:
+                try:
+                    return f"ARRAY [0..{int(array_size)-1}] OF {base_type}"
+                except ValueError:
+                    return f"ARRAY [{array_size}] OF {base_type}"
         return base_type
 
     def _infer_from_connections(self, inst: FBInstance, model: NetworkModel):
@@ -728,6 +775,63 @@ class TypeResolver:
         if not inst.fb_type:
             inst.fb_type = "SubApp" if inst.is_subapp else "BasicFB"
 
+    def _supplement_from_connections(self, inst: FBInstance, model: NetworkModel):
+        """Handle mapped/renamed ports on SubApp instances.
+
+        When an FB is instantiated inside a SubApp, 4diac may map/rename ports.
+        The connections use the mapped names which differ from the type definition.
+        For each port category, if any connection-referenced port is missing from
+        the type definition, replace that category entirely with connection-inferred
+        ports (the type's port names don't match the instance's actual ports).
+        """
+        conn_ei, conn_eo, conn_di, conn_do = [], [], [], []
+
+        for conn in model.connections:
+            src_parts = conn.source.split(".")
+            dst_parts = conn.destination.split(".")
+
+            if len(src_parts) == 2 and src_parts[0] == inst.name:
+                port_name = src_parts[1]
+                if conn.conn_type == "event":
+                    if port_name not in conn_eo:
+                        conn_eo.append(port_name)
+                elif conn.conn_type == "data":
+                    if port_name not in conn_do:
+                        conn_do.append(port_name)
+
+            if len(dst_parts) == 2 and dst_parts[0] == inst.name:
+                port_name = dst_parts[1]
+                if conn.conn_type == "event":
+                    if port_name not in conn_ei:
+                        conn_ei.append(port_name)
+                elif conn.conn_type == "data":
+                    if port_name not in conn_di:
+                        conn_di.append(port_name)
+
+        # For each category: if any connection port is missing from type def,
+        # replace that category with connection-inferred ports
+        type_ei = {p.name for p in inst.event_inputs}
+        type_eo = {p.name for p in inst.event_outputs}
+        type_di = {p.name for p in inst.data_inputs}
+        type_do = {p.name for p in inst.data_outputs}
+
+        if any(n not in type_ei for n in conn_ei):
+            inst.event_inputs = [Port(name=n, port_type="Event") for n in conn_ei]
+        if any(n not in type_eo for n in conn_eo):
+            inst.event_outputs = [Port(name=n, port_type="Event") for n in conn_eo]
+        if any(n not in type_di for n in conn_di):
+            inst.data_inputs = [Port(name=n) for n in conn_di]
+        if any(n not in type_do for n in conn_do):
+            inst.data_outputs = [Port(name=n) for n in conn_do]
+
+        # Add parameter ports not already present
+        existing_di = {p.name for p in inst.data_inputs}
+        existing_ei = {p.name for p in inst.event_inputs}
+        for param_name in inst.parameters:
+            if not param_name.startswith("__") and param_name not in existing_di and param_name not in existing_ei:
+                inst.data_inputs.append(Port(name=param_name))
+                existing_di.add(param_name)
+
 
 # ===========================================================================
 # Layout Engine
@@ -737,15 +841,20 @@ class NetworkLayoutEngine:
     """Computes positions and sizes for all network elements."""
 
     # Layout constants – calibrated to match 4diac IDE at 100 % zoom
-    PORT_ROW_HEIGHT = 16
+    # Visual lineHeight = 17 (TGL 0-17_std @ 12pt port-to-port spacing)
+    # Coordinate SCALE = 0.15 (Menlo-12 lineHeight=15: 15/100 = 0.15, confirmed
+    #   by retina measurement: all 9 pairwise Y-axis checks give exactly 0.15)
+    PORT_ROW_HEIGHT = 17
     BLOCK_PADDING = 10
-    NAME_SECTION_HEIGHT = 16
+    NAME_SECTION_HEIGHT = 17
+    BLOCK_MARGIN_PX = 2       # SWT GridLayout margins: marginHeight=1 per section, net +2
+    INSTANCE_LABEL_HEIGHT = 15  # Coordinate-system lineHeight (Menlo-12: 15px)
     CONNECTOR_WIDTH = 10
     TRIANGLE_WIDTH = 5
     TRIANGLE_HEIGHT = 10
     FONT_SIZE = 12
     MARGIN = 60           # Margin around the diagram for interface ports
-    SCALE = 0.16          # 4diac canvas units → SVG pixels (100 % zoom)
+    SCALE = 0.15          # 4diac canvas units → SVG pixels (lineHeight/100 = 15/100)
 
     def __init__(self, settings: BlockSizeSettings = None):
         self.settings = settings or BlockSizeSettings()
@@ -841,15 +950,17 @@ class NetworkLayoutEngine:
         num_data_rows = max(num_data_inputs, num_data_outputs)
         num_adapter_rows = max(num_sockets, num_plugs)
 
-        section_padding = self.PORT_ROW_HEIGHT / 2 - 4
-        inst.event_section_height = num_event_rows * self.PORT_ROW_HEIGHT + section_padding
-        inst.data_section_height = (num_data_rows * self.PORT_ROW_HEIGHT + section_padding) if num_data_rows > 0 else 4
-        inst.adapter_section_height = num_adapter_rows * self.PORT_ROW_HEIGHT if num_adapter_rows > 0 else 0
+        # Visual block height matches the SWT GridLayout preferred size:
+        #   (port_rows + 1) * lineHeight + BLOCK_MARGIN_PX
+        # The +1 accounts for the notch/name section (one lineHeight).
+        # The BLOCK_MARGIN_PX (2) comes from SWT GridLayout margins
+        # (marginHeight=1 per section, verticalSpacing=-1 between sections).
+        port_rows = num_event_rows + num_data_rows + num_adapter_rows
+        inst.block_height = (port_rows + 1) * self.PORT_ROW_HEIGHT + self.BLOCK_MARGIN_PX
 
-        inst.block_height = (inst.event_section_height +
-                           self.NAME_SECTION_HEIGHT +
-                           inst.data_section_height +
-                           inst.adapter_section_height)
+        inst.event_section_height = num_event_rows * self.PORT_ROW_HEIGHT
+        inst.data_section_height = num_data_rows * self.PORT_ROW_HEIGHT if num_data_rows > 0 else 0
+        inst.adapter_section_height = num_adapter_rows * self.PORT_ROW_HEIGHT if num_adapter_rows > 0 else 0
 
         # Width calculation
         # Instance name is rendered ABOVE the block, so it doesn't constrain block width.
@@ -862,8 +973,8 @@ class NetworkLayoutEngine:
         type_width = self._measure_text(short_type, italic=True)
         name_section_width = notch + 1 + icon_w + gap_icon_text + type_width + 5 + notch
 
-        triangle_space = self.TRIANGLE_WIDTH + 3 + 1.5
-        adapter_space = self.TRIANGLE_WIDTH * 2 + 3 + 1.5
+        triangle_space = self.TRIANGLE_WIDTH + 1 + 1.5
+        adapter_space = self.TRIANGLE_WIDTH * 2 + 1 + 1.5
 
         # Minimum pin label width in pixels (from min_pin_label_size setting)
         min_pin_w = self._measure_text("W" * self.settings.min_pin_label_size) if self.settings.min_pin_label_size > 0 else 0
@@ -889,6 +1000,10 @@ class NetworkLayoutEngine:
 
         inst.block_width = max(name_section_width, ports_width)
 
+        # Figure width includes the instance name label (may be wider than block)
+        instance_name_width = self._measure_text(inst.name, italic=False) + 4  # small padding
+        inst.figure_width = max(instance_name_width, inst.block_width)
+
         inst.name_section_top = inst.event_section_height
         inst.name_section_bottom = inst.event_section_height + self.NAME_SECTION_HEIGHT
         inst.adapter_section_top = inst.name_section_bottom + inst.data_section_height
@@ -902,10 +1017,17 @@ class NetworkLayoutEngine:
         min_x = min(inst.x for inst in model.instances)
         min_y = min(inst.y for inst in model.instances)
 
-        # Apply scale and offset
+        # Apply scale and offset.
+        # In 4diac IDE, (x, y) is the top-left of the entire figure including the
+        # instance name label above the block body.  We offset render_y downward
+        # by INSTANCE_LABEL_HEIGHT so render_x/render_y point to the block body
+        # top-left.  When the instance name is wider than the block, the block body
+        # is centered within the figure — offset render_x accordingly.
         for inst in model.instances:
             inst.render_x = (inst.x - min_x) * self.SCALE + self.MARGIN
+            inst.render_x += (inst.figure_width - inst.block_width) / 2
             inst.render_y = (inst.y - min_y) * self.SCALE + self.MARGIN
+            inst.render_y += self.INSTANCE_LABEL_HEIGHT
 
         # Store the mapping from canvas origin (0, 0) to pixel coordinates.
         # This is needed by the connection router: for interface→FB connections,
@@ -916,10 +1038,8 @@ class NetworkLayoutEngine:
 
     def _compute_port_positions(self, inst: FBInstance):
         """Compute absolute (x, y) for each port on an instance."""
-        top_padding = self.PORT_ROW_HEIGHT / 2 - 4
-
-        # Event inputs (left side)
-        y = self.PORT_ROW_HEIGHT / 2 + top_padding
+        # Event inputs (left side) – centered in each row
+        y = self.PORT_ROW_HEIGHT / 2
         for port in inst.event_inputs:
             abs_x = inst.render_x
             abs_y = inst.render_y + y
@@ -927,7 +1047,7 @@ class NetworkLayoutEngine:
             y += self.PORT_ROW_HEIGHT
 
         # Event outputs (right side)
-        y = self.PORT_ROW_HEIGHT / 2 + top_padding
+        y = self.PORT_ROW_HEIGHT / 2
         for port in inst.event_outputs:
             abs_x = inst.render_x + inst.block_width
             abs_y = inst.render_y + y
@@ -984,22 +1104,29 @@ class NetworkLayoutEngine:
         inputs = [p for p in model.interface_ports if p.direction == "input"]
         outputs = [p for p in model.interface_ports if p.direction == "output"]
 
-        # Measure sidebar widths: text + gap + triangle, minimal outer margin
-        sidebar_outer_margin = 2   # margin at the outer border edge
-        sidebar_gap = 3            # gap between text and triangle
+        # Measure sidebar widths: text + gap + symbol, minimal outer margin
+        sidebar_outer_margin = 1   # 1px margin at outer border edge
+        sidebar_gap = 1            # 1px gap between text and symbol
         tri_w = self.TRIANGLE_WIDTH
+        adapter_sym_w = self.TRIANGLE_WIDTH * 2  # adapter socket/plug symbol is wider
         max_iface = self.settings.max_interface_bar_size
         input_sidebar_w = 0
+        input_sym_w = tri_w  # track widest symbol needed
         for p in inputs:
             tw = self._measure_text(_truncate_label(p.name, max_iface))
             input_sidebar_w = max(input_sidebar_w, tw)
-        input_sidebar_w += sidebar_outer_margin + sidebar_gap + tri_w if inputs else 0
+            if p.category == "adapter":
+                input_sym_w = max(input_sym_w, adapter_sym_w)
+        input_sidebar_w += sidebar_outer_margin + sidebar_gap + input_sym_w if inputs else 0
 
         output_sidebar_w = 0
+        output_sym_w = tri_w
         for p in outputs:
             tw = self._measure_text(_truncate_label(p.name, max_iface))
             output_sidebar_w = max(output_sidebar_w, tw)
-        output_sidebar_w += sidebar_outer_margin + sidebar_gap + tri_w if outputs else 0
+            if p.category == "adapter":
+                output_sym_w = max(output_sym_w, adapter_sym_w)
+        output_sidebar_w += sidebar_outer_margin + sidebar_gap + output_sym_w if outputs else 0
 
         # Clamp sidebar widths to min/max interface bar size
         min_iface_w = self._measure_text("W" * self.settings.min_interface_bar_size) if self.settings.min_interface_bar_size > 0 else 0
@@ -1016,7 +1143,7 @@ class NetworkLayoutEngine:
         if model.instances:
             inst_min_x = min(inst.render_x for inst in model.instances)
             inst_max_x = max(inst.render_x + inst.block_width for inst in model.instances)
-            inst_min_y = min(inst.render_y - 20 for inst in model.instances)  # label above
+            inst_min_y = min(inst.render_y - self.INSTANCE_LABEL_HEIGHT - 4 for inst in model.instances)  # label above
             inst_max_y = max(inst.render_y + inst.block_height for inst in model.instances)
         else:
             inst_min_x, inst_max_x = self.MARGIN, self.MARGIN + 200
@@ -1067,17 +1194,48 @@ class NetworkLayoutEngine:
                         if dx1_px <= dist_to_dest * 0.5:
                             max_turn_offset = max(max_turn_offset, dx1_px)
 
-        sidebar_padding_left = 58
+        sidebar_padding_left = 20
         sidebar_gap_left = max_turn_offset + sidebar_padding_left
         input_sidebar_right = inst_min_x - sidebar_gap_left
+
+        # Check if any connection turn points from the sidebar would overshoot
+        # past their destination FB.  This happens when the leftmost FB has
+        # large dx1 values — the turn point lands inside or past the FB.
+        # In that case, shift all instances right to create room (like 4diac IDE).
+        max_overshoot = 0.0
+        for conn in model.connections:
+            src_parts = conn.source.split(".")
+            if len(src_parts) == 1 and src_parts[0] in input_port_names and conn.dx1 != 0:
+                dx1_px = conn.dx1 * self.SCALE
+                dst_parts = conn.destination.split(".")
+                if len(dst_parts) == 2:
+                    dst_inst = instance_map_tmp.get(dst_parts[0])
+                    if dst_inst:
+                        turn_x = input_sidebar_right + dx1_px
+                        overshoot = turn_x - dst_inst.render_x
+                        if overshoot > 0:
+                            max_overshoot = max(max_overshoot, overshoot)
+
+        if max_overshoot > 0:
+            # Add padding so the turn point is clearly left of the FB
+            shift = max_overshoot + 91
+            for inst in model.instances:
+                inst.render_x += shift
+                # Update port positions
+                for pname in inst.port_positions:
+                    px, py = inst.port_positions[pname]
+                    inst.port_positions[pname] = (px + shift, py)
+            inst_min_x += shift
+            inst_max_x += shift
+            model.canvas_origin_x += shift
+
         input_sidebar_left = input_sidebar_right - input_sidebar_w
 
         # --- Output (right) sidebar positioning ---
-        # Mirror of the left-side logic: find the maximum turn-point offset
-        # (measured rightward from inst_max_x) for FB→interface connections.
-        # Only consider turn points whose dx1 offset is less than half the
-        # distance from the source FB's right edge to the network's left edge
-        # (filtering out connections that route far back into the network).
+        # Find the maximum turn-point offset (measured rightward from inst_max_x)
+        # for FB→interface connections.  Only consider turn points that fall
+        # between the source FB and a reasonable sidebar position (i.e. the turn
+        # point doesn't route far back into the network to the left).
         max_right_turn_offset = 0.0
         for conn in model.connections:
             dst_parts = conn.destination.split(".")
@@ -1093,10 +1251,7 @@ class NetworkLayoutEngine:
                             turn_x = src_x + dx1_px
                             offset_from_right = turn_x - inst_max_x
                             if offset_from_right > 0:
-                                src_right = src_inst.render_x + src_inst.block_width
-                                dist_src_to_left = src_right - inst_min_x
-                                if dx1_px <= dist_src_to_left * 0.5:
-                                    max_right_turn_offset = max(max_right_turn_offset, offset_from_right)
+                                max_right_turn_offset = max(max_right_turn_offset, offset_from_right)
 
         sidebar_padding_right = 20
         sidebar_gap_right = max_right_turn_offset + sidebar_padding_right
@@ -1104,8 +1259,8 @@ class NetworkLayoutEngine:
         output_sidebar_right = output_sidebar_left + output_sidebar_w
 
         # Sidebar vertical extent: starts above the topmost instance area
-        sidebar_row_h = 17  # spacing for sidebar port names
-        top_pad = sidebar_row_h * 1.0  # space above first port
+        sidebar_row_h = 17  # spacing for sidebar port names (= lineHeight for TGL 0-17 @ 12pt)
+        top_pad = 29  # space above first port: int(lineHeight * 1.75) = int(17 * 1.75)
         sidebar_top = inst_min_y - 58
 
         input_sidebar_h = (len(inputs) * sidebar_row_h + top_pad) if inputs else 0
@@ -1141,15 +1296,16 @@ class NetworkLayoutEngine:
         The outer border frames the entire diagram (header + sidebars + network area).
         Sidebars are adjusted to span from header separator to border bottom.
         """
-        HEADER_HEIGHT = 25   # Height of the header bar
+        HEADER_HEIGHT = 25   # Height of the header bar (margin + text + margin)
 
-        # Determine the full horizontal extent (sidebars or instances)
+        # Determine the full horizontal and vertical extent (sidebars + instances)
         all_x = []
         all_y = []
 
+        label_above = self.INSTANCE_LABEL_HEIGHT + 4  # label height + padding above label
         for inst in model.instances:
             all_x.extend([inst.render_x, inst.render_x + inst.block_width])
-            all_y.extend([inst.render_y - 20, inst.render_y + inst.block_height])
+            all_y.extend([inst.render_y - label_above, inst.render_y + inst.block_height])
 
         if model.input_sidebar_rect:
             sx, sy, sw, sh = model.input_sidebar_rect
@@ -1168,7 +1324,47 @@ class NetworkLayoutEngine:
         content_top = min(all_y)
         content_bottom = max(all_y)
 
-        border_pad_v = 40  # vertical padding (top/bottom)
+        border_pad_v = 120  # vertical padding (top/bottom) between content extent and header/border
+
+        # 4diac IDE enforces a minimum network area size (2224×1148 retina → 1112×574 CSS px).
+        # This is the INNER area between sidebars and below the header.
+        MIN_NETWORK_WIDTH = 1112
+        MIN_NETWORK_HEIGHT = 574
+
+        # Compute the inner network area (between sidebar edges)
+        input_sw = 0
+        output_sw = 0
+        if model.input_sidebar_rect:
+            input_sw = model.input_sidebar_rect[2]  # width
+        if model.output_sidebar_rect:
+            output_sw = model.output_sidebar_rect[2]  # width
+        network_left = content_left + input_sw
+        network_right = content_right - output_sw
+        network_w = network_right - network_left
+        network_h = content_bottom - content_top + 2 * border_pad_v + 25  # include header + padding
+
+        if network_w < MIN_NETWORK_WIDTH:
+            extra = MIN_NETWORK_WIDTH - network_w
+            shift_x = extra / 2
+            # Center FB instances within the expanded network area
+            for inst in model.instances:
+                inst.render_x += shift_x
+                for pname in inst.port_positions:
+                    px, py = inst.port_positions[pname]
+                    inst.port_positions[pname] = (px + shift_x, py)
+            model.canvas_origin_x += shift_x
+            # Expand content_right to accommodate the wider network area + output sidebar
+            content_right = content_left + input_sw + MIN_NETWORK_WIDTH + output_sw
+            # Reposition output sidebar to the new right edge
+            if model.output_sidebar_rect:
+                sx, sy, sw, sh = model.output_sidebar_rect
+                model.output_sidebar_rect = (content_right - sw, sy, sw, sh)
+                for ip in model.interface_ports:
+                    if ip.direction == "output":
+                        ip.render_x = content_right - sw
+        if network_h < MIN_NETWORK_HEIGHT:
+            extra = MIN_NETWORK_HEIGHT - network_h
+            content_bottom += extra
 
         # Outer border rectangle — sidebars form the left/right edges
         border_x = content_left
@@ -1201,7 +1397,7 @@ class NetworkLayoutEngine:
         # Reposition interface port labels relative to header_bottom so they
         # stay near the top of the sidebar regardless of border_pad_v.
         sidebar_row_h = 17
-        label_top_pad = 37  # gap from header separator to first label
+        label_top_pad = 35  # gap from header separator to first label
         inputs = [p for p in model.interface_ports if p.direction == "input"]
         outputs = [p for p in model.interface_ports if p.direction == "output"]
         for i, port in enumerate(inputs):
@@ -1222,7 +1418,7 @@ class NetworkLayoutEngine:
 
         for inst in model.instances:
             all_x.extend([inst.render_x, inst.render_x + inst.block_width])
-            all_y.extend([inst.render_y - 20, inst.render_y + inst.block_height])  # -20 for instance label above
+            all_y.extend([inst.render_y - self.INSTANCE_LABEL_HEIGHT - 4, inst.render_y + inst.block_height])  # label above
 
         # Include sidebar rectangles in bounds
         if model.input_sidebar_rect:
@@ -1444,12 +1640,12 @@ class NetworkSVGRenderer:
     # Colors (from 4diac IDE)
     BLOCK_STROKE_COLOR = "#A0A0A0"
     EVENT_PORT_COLOR = "#63B31F"
-    BOOL_PORT_COLOR = "#9FA48A"
+    BOOL_PORT_COLOR = "#A3B08F"
     ANY_BIT_PORT_COLOR = "#82A3A9"
     ANY_INT_PORT_COLOR = "#18519E"
     ANY_REAL_PORT_COLOR = "#DBB418"
     STRING_PORT_COLOR = "#BD8663"
-    DATA_PORT_COLOR = "#0000FF"
+    DATA_PORT_COLOR = "#3366FF"
     ADAPTER_PORT_COLOR = "#845DAF"
 
     STRING_TYPES = {"STRING", "WSTRING", "ANY_STRING", "ANY_CHARS", "CHAR", "WCHAR"}
@@ -1458,9 +1654,9 @@ class NetworkSVGRenderer:
     BIT_TYPES = {"BYTE", "WORD", "DWORD", "LWORD", "ANY_BIT"}
 
     # Layout – must match NetworkLayoutEngine constants
-    PORT_ROW_HEIGHT = 16
+    PORT_ROW_HEIGHT = 17
     BLOCK_PADDING = 10
-    NAME_SECTION_HEIGHT = 16
+    NAME_SECTION_HEIGHT = 17
     TRIANGLE_WIDTH = 5
     TRIANGLE_HEIGHT = 10
 
@@ -1556,6 +1752,75 @@ class NetworkSVGRenderer:
                  "ANY_REAL", "ANY_INT", "ANY_BIT", "ANY_STRING", "ANY_CHARS",
                  "ANY_DATE", "ANY_DURATION", "ANY_STRUCT"}
 
+    # All primitive IEC 61499 types (non-struct)
+    PRIMITIVE_TYPES = ({"BOOL", "Event", "TIME", "LTIME", "DATE", "LDATE",
+                        "TIME_OF_DAY", "LTOD", "DATE_AND_TIME", "LDT"}
+                       | STRING_TYPES | INT_TYPES | REAL_TYPES | BIT_TYPES | ANY_TYPES)
+
+    @staticmethod
+    def _lighter_color(hex_color: str) -> str:
+        """Compute a lighter variant of a hex color (4diac HSL lightness * 1.667)."""
+        hex_color = hex_color.lstrip("#")
+        r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+        # RGB to HSL
+        r1, g1, b1 = r / 255.0, g / 255.0, b / 255.0
+        cmax, cmin = max(r1, g1, b1), min(r1, g1, b1)
+        delta = cmax - cmin
+        l = (cmax + cmin) / 2.0
+        if delta == 0:
+            h = s = 0.0
+        else:
+            s = delta / (1 - abs(2 * l - 1))
+            if cmax == r1:
+                h = 60 * (((g1 - b1) / delta) % 6)
+            elif cmax == g1:
+                h = 60 * ((b1 - r1) / delta + 2)
+            else:
+                h = 60 * ((r1 - g1) / delta + 4)
+        # Increase lightness by factor 1.667 (matching 4diac's 1/0.6),
+        # capped at 0.9 to avoid pure white inner lines in SVG
+        l = min(0.9, l * (1.0 / 0.6))
+        # HSL to RGB
+        c = (1 - abs(2 * l - 1)) * s
+        x = c * (1 - abs((h / 60) % 2 - 1))
+        m = l - c / 2
+        if h < 60:
+            r1, g1, b1 = c, x, 0
+        elif h < 120:
+            r1, g1, b1 = x, c, 0
+        elif h < 180:
+            r1, g1, b1 = 0, c, x
+        elif h < 240:
+            r1, g1, b1 = 0, x, c
+        elif h < 300:
+            r1, g1, b1 = x, 0, c
+        else:
+            r1, g1, b1 = c, 0, x
+        ro = int(min(255, (r1 + m) * 255))
+        go = int(min(255, (g1 + m) * 255))
+        bo = int(min(255, (b1 + m) * 255))
+        return f"#{ro:02X}{go:02X}{bo:02X}"
+
+    def _is_struct_type(self, port_type: str) -> bool:
+        """Check if a port type is a structured (non-primitive) type."""
+        if not port_type:
+            return False
+        return port_type not in self.PRIMITIVE_TYPES
+
+    def _is_double_line_connection(self, conn: Connection, model: NetworkModel,
+                                    instance_map: Dict[str, FBInstance]) -> bool:
+        """Check if a connection should be rendered as a double-line (adapter or struct)."""
+        if conn.conn_type == "adapter":
+            return True
+        if conn.conn_type == "data":
+            src_type = self._resolve_port_type(conn.source, model, instance_map)
+            if self._is_struct_type(src_type):
+                return True
+            dst_type = self._resolve_port_type(conn.destination, model, instance_map)
+            if self._is_struct_type(dst_type):
+                return True
+        return False
+
     def _resolve_port_type(self, endpoint: str, model: NetworkModel,
                            instance_map: Dict[str, FBInstance]) -> str:
         """Resolve the data type of a connection endpoint (source or destination)."""
@@ -1637,8 +1902,8 @@ class NetworkSVGRenderer:
             # Header background
             parts.append(f'  <rect x="{hx:.1f}" y="{hy:.1f}" width="{hw:.1f}" height="{hh:.1f}"'
                         f' fill="white" stroke="none"/>')
-            # Header separator line (at bottom of header)
-            sep_y = hy + hh
+            # Header separator line (at bottom of header, inside the header area)
+            sep_y = hy + hh - 0.5
             parts.append(f'  <line x1="{hx:.1f}" y1="{sep_y:.1f}" x2="{hx + hw:.1f}" y2="{sep_y:.1f}"'
                         f' stroke="{self.BLOCK_STROKE_COLOR}" stroke-width="1"/>')
             # Comment text
@@ -1653,7 +1918,7 @@ class NetworkSVGRenderer:
                     .replace('"', "&quot;"))
                 parts.append(f'  <text x="{text_x:.1f}" y="{text_y:.1f}"'
                             f' font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"'
-                            f' fill="#333333">{comment_text}</text>')
+                            f' font-weight="bold" fill="#333333">{comment_text}</text>')
 
         # Render sidebar backgrounds (behind everything else)
         parts.append('  <g id="sidebars">')
@@ -1741,7 +2006,8 @@ class NetworkSVGRenderer:
             waypoints = router.route(conn, model, instance_map, interface_map)
             if waypoints:
                 color = self._get_connection_color(conn, model, instance_map)
-                parts.append(self._render_connection(waypoints, color))
+                double = self._is_double_line_connection(conn, model, instance_map)
+                parts.append(self._render_connection(waypoints, color, double_line=double))
         parts.append('  </g>')
 
         # Render interface ports
@@ -1997,16 +2263,15 @@ class NetworkSVGRenderer:
 
     def _render_event_ports(self, inst: FBInstance) -> str:
         parts = []
-        top_padding = self.PORT_ROW_HEIGHT / 2 - 4
 
-        # Event inputs (left side)
-        y = self.PORT_ROW_HEIGHT / 2 + top_padding
+        # Event inputs (left side) – centered in each row
+        y = self.PORT_ROW_HEIGHT / 2
         for port in inst.event_inputs:
             parts.append(self._render_port_left(port, y, self.EVENT_PORT_COLOR, is_event=True))
             y += self.PORT_ROW_HEIGHT
 
         # Event outputs (right side)
-        y = self.PORT_ROW_HEIGHT / 2 + top_padding
+        y = self.PORT_ROW_HEIGHT / 2
         for port in inst.event_outputs:
             parts.append(self._render_port_right(port, y, inst.block_width, self.EVENT_PORT_COLOR, is_event=True))
             y += self.PORT_ROW_HEIGHT
@@ -2039,12 +2304,11 @@ class NetworkSVGRenderer:
             return ""
 
         parts = []
-        top_padding = self.PORT_ROW_HEIGHT / 2 - 4
 
         # Build port name → local y lookup for all input ports
         port_y_map: Dict[str, float] = {}
         # Event inputs
-        y = self.PORT_ROW_HEIGHT / 2 + top_padding
+        y = self.PORT_ROW_HEIGHT / 2
         for port in inst.event_inputs:
             port_y_map[port.name] = y
             y += self.PORT_ROW_HEIGHT
@@ -2109,7 +2373,7 @@ class NetworkSVGRenderer:
         tri_x = 0  # base aligned with left FB border
         tri_points = f"{tri_x},{tri_y - th/2} {tri_x + tw},{tri_y} {tri_x},{tri_y + th/2}"
 
-        text_x = tri_x + tw + 3
+        text_x = tri_x + tw + 1
         text_y = y + self.FONT_SIZE * 0.35
 
         display_name = _truncate_label(port.name, self.settings.max_pin_label_size)
@@ -2125,7 +2389,7 @@ class NetworkSVGRenderer:
         tri_x = block_width - tw  # tip at right FB border
         tri_points = f"{tri_x},{tri_y - th/2} {tri_x + tw},{tri_y} {tri_x},{tri_y + th/2}"
 
-        text_x = tri_x - 3
+        text_x = tri_x - 1
         text_y = y + self.FONT_SIZE * 0.35
 
         display_name = _truncate_label(port.name, self.settings.max_pin_label_size)
@@ -2255,8 +2519,13 @@ class NetworkSVGRenderer:
         result.append(waypoints[-1])
         return result
 
-    def _render_connection(self, waypoints: List[Tuple[float, float]], color: str) -> str:
-        """Render a connection as a polyline with 45-degree bevels and diagonal endpoint stubs."""
+    def _render_connection(self, waypoints: List[Tuple[float, float]], color: str,
+                            double_line: bool = False) -> str:
+        """Render a connection as a polyline with 45-degree bevels and diagonal endpoint stubs.
+
+        When double_line=True, renders a thick outer line with a lighter inner line
+        on top (matching 4diac IDE's adapter/struct connection style).
+        """
         if len(waypoints) < 2:
             return ""
 
@@ -2266,6 +2535,11 @@ class NetworkSVGRenderer:
         # Build polyline points
         pts = " ".join(f"{x:.1f},{y:.1f}" for x, y in beveled)
 
+        if double_line:
+            lighter = self._lighter_color(color)
+            outer = f'    <polyline points="{pts}" fill="none" stroke="{color}" stroke-width="3" stroke-linejoin="round"/>'
+            inner = f'    <polyline points="{pts}" fill="none" stroke="{lighter}" stroke-width="1" stroke-linejoin="round"/>'
+            return outer + "\n" + inner
         return f'    <polyline points="{pts}" fill="none" stroke="{color}" stroke-width="1.5" stroke-linejoin="round"/>'
 
     # ----- Interface Port Rendering -----
@@ -2275,7 +2549,8 @@ class NetworkSVGRenderer:
 
         Input ports: triangle at right edge (inside sidebar), name to the left
         Output ports: triangle at left edge (inside sidebar), name to the right
-        The triangle and label are entirely within the blue sidebar area.
+        Adapter ports use socket/plug symbols instead of triangles.
+        The symbol and label are entirely within the blue sidebar area.
         """
         x = ip.render_x
         y = ip.render_y
@@ -2290,6 +2565,12 @@ class NetworkSVGRenderer:
 
         tw = self.TRIANGLE_WIDTH
         th = self.TRIANGLE_HEIGHT
+        display_name = _truncate_label(ip.name, self.settings.max_interface_bar_size)
+        text_y = y + self.FONT_SIZE * 0.35  # vertically center text with symbol
+
+        # Adapter ports use socket/plug symbols
+        if ip.category == "adapter":
+            return self._render_interface_adapter_port(ip, x, y, text_y, display_name)
 
         if ip.direction == "input":
             # x = right edge of input sidebar
@@ -2297,7 +2578,7 @@ class NetworkSVGRenderer:
             tri_x = x - tw  # triangle base is inside the sidebar
             tri_points = f"{tri_x},{y - th/2} {x},{y} {tri_x},{y + th/2}"
             # Text inside sidebar, to the left of triangle
-            text_x = tri_x - 3
+            text_x = tri_x - 1
             text_anchor = "end"
         else:
             # x = left edge of output sidebar
@@ -2305,12 +2586,79 @@ class NetworkSVGRenderer:
             tri_x = x + tw  # triangle base is inside the sidebar
             tri_points = f"{tri_x},{y - th/2} {x},{y} {tri_x},{y + th/2}"
             # Text inside sidebar, to the right of triangle
-            text_x = tri_x + 3
+            text_x = tri_x + 1
             text_anchor = "start"
 
-        text_y = y + self.FONT_SIZE * 0.35  # vertically center text with triangle
-        display_name = _truncate_label(ip.name, self.settings.max_interface_bar_size)
         return f'''    <polygon points="{tri_points}" fill="{color}"/>
+    <text x="{text_x}" y="{text_y:.1f}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
+          fill="#000000" text-anchor="{text_anchor}">{display_name}</text>'''
+
+    def _render_interface_adapter_port(self, ip: InterfacePort,
+                                        x: float, y: float,
+                                        text_y: float, display_name: str) -> str:
+        """Render an adapter interface port with socket/plug symbol in the sidebar.
+
+        Input adapters (sockets): symbol at right edge, text to the left.
+        Output adapters (plugs): symbol at left edge, text to the right.
+        """
+        rect_w = self.TRIANGLE_WIDTH * 2
+        rect_h = self.TRIANGLE_HEIGHT
+        color = self.ADAPTER_PORT_COLOR
+
+        if ip.direction == "input":
+            # Socket symbol at right edge of input sidebar (filled, mirrored)
+            # x = right edge of sidebar; symbol right edge aligns with x
+            # Notch on left half (mirrored from FB socket which has notch on right half)
+            rect_x = x - rect_w
+            rect_y = y - rect_h / 2
+            notch_start = rect_x + rect_w / 4
+            notch_width = rect_w / 4
+            notch_depth = rect_h / 6
+
+            path_d = (f"M {rect_x} {rect_y} L {notch_start} {rect_y} "
+                       f"L {notch_start} {rect_y + notch_depth} "
+                       f"L {notch_start + notch_width} {rect_y + notch_depth} "
+                       f"L {notch_start + notch_width} {rect_y} "
+                       f"L {rect_x + rect_w} {rect_y} "
+                       f"L {rect_x + rect_w} {rect_y + rect_h} "
+                       f"L {notch_start + notch_width} {rect_y + rect_h} "
+                       f"L {notch_start + notch_width} {rect_y + rect_h - notch_depth} "
+                       f"L {notch_start} {rect_y + rect_h - notch_depth} "
+                       f"L {notch_start} {rect_y + rect_h} "
+                       f"L {rect_x} {rect_y + rect_h} Z")
+
+            text_x = rect_x - 3
+            text_anchor = "end"
+            fill = color
+            stroke = ""
+        else:
+            # Plug symbol at left edge of output sidebar (outline, mirrored)
+            # x = left edge of sidebar; symbol left edge aligns with x
+            # Notch on right half (mirrored from FB plug which has notch on left half)
+            rect_x = x
+            rect_y = y - rect_h / 2
+            notch_start = rect_x + rect_w / 2
+            notch_width = rect_w / 4
+            notch_depth = rect_h / 6
+
+            path_d = (f"M {rect_x} {rect_y} L {notch_start} {rect_y} "
+                       f"L {notch_start} {rect_y + notch_depth} "
+                       f"L {notch_start + notch_width} {rect_y + notch_depth} "
+                       f"L {notch_start + notch_width} {rect_y} "
+                       f"L {rect_x + rect_w} {rect_y} "
+                       f"L {rect_x + rect_w} {rect_y + rect_h} "
+                       f"L {notch_start + notch_width} {rect_y + rect_h} "
+                       f"L {notch_start + notch_width} {rect_y + rect_h - notch_depth} "
+                       f"L {notch_start} {rect_y + rect_h - notch_depth} "
+                       f"L {notch_start} {rect_y + rect_h} "
+                       f"L {rect_x} {rect_y + rect_h} Z")
+
+            text_x = rect_x + rect_w + 3
+            text_anchor = "start"
+            fill = "none"
+            stroke = f' stroke="{color}" stroke-width="1"'
+
+        return f'''    <path d="{path_d}" fill="{fill}"{stroke}/>
     <text x="{text_x}" y="{text_y:.1f}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
           fill="#000000" text-anchor="{text_anchor}">{display_name}</text>'''
 
@@ -2449,10 +2797,16 @@ def main():
     show_grid = args.grid
     settings = load_block_size_settings(args.settings)
 
+    # Merge type library paths: INI defaults + CLI --type-lib arguments
+    type_lib_paths = list(settings.type_lib_paths or [])
+    for p in (args.type_lib or []):
+        if p not in type_lib_paths:
+            type_lib_paths.append(p)
+
     if args.batch or input_path.is_dir():
         output_dir = args.output or str(input_path) + "_network_svg"
         count = convert_batch(str(input_path), output_dir,
-                            type_lib=args.type_lib,
+                            type_lib=type_lib_paths,
                             show_shadow=show_shadow,
                             show_grid=show_grid,
                             recursive=not args.no_recursive,
@@ -2460,7 +2814,7 @@ def main():
         print(f"Converted {count} network files to {output_dir}")
     elif args.stdout:
         svg = convert_network_to_svg(str(input_path),
-                                     type_lib=args.type_lib,
+                                     type_lib=type_lib_paths,
                                      show_shadow=show_shadow,
                                      show_grid=show_grid,
                                      settings=settings)
@@ -2468,7 +2822,7 @@ def main():
     else:
         output_path = args.output or str(input_path.with_suffix('.network.svg'))
         convert_network_to_svg(str(input_path), output_path,
-                              type_lib=args.type_lib,
+                              type_lib=type_lib_paths,
                               show_shadow=show_shadow,
                               show_grid=show_grid,
                               settings=settings)
