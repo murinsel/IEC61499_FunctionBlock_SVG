@@ -33,13 +33,13 @@ Available as both a **Python** script and a **JavaScript** module (browser + Nod
 | Type Category | Color | Types |
 |---------------|-------|-------|
 | Event | Green `#63B31F` | Event |
-| BOOL | Gray-green `#9FA48A` | BOOL |
+| BOOL | Gray-green `#A3B08F` | BOOL |
 | Integer | Dark blue `#18519E` | INT, UINT, SINT, DINT, LINT, ANY_INT, ... |
 | Real | Gold `#DBB418` | REAL, LREAL, ANY_REAL |
 | String | Brown `#BD8663` | STRING, WSTRING, ANY_STRING, CHAR, ... |
 | Bit | Blue-gray `#82A3A9` | BYTE, WORD, DWORD, LWORD, ANY_BIT |
 | Adapter | Purple `#845DAF` | Adapter types |
-| Other | Blue `#0000FF` | Generic data types |
+| Other | Blue `#3366FF` | Generic data types |
 
 ## Usage
 
@@ -126,7 +126,7 @@ Requires `jsdom` (`npm install jsdom`).
 
 ### Settings File (`block_size_settings.ini`)
 
-Controls block rendering dimensions in network diagrams:
+Controls block rendering dimensions and type library paths for network diagrams:
 
 ```ini
 [BlockSize]
@@ -141,6 +141,13 @@ max_hidden_connection_label_size = 15
 [BlockMargins]
 top_bottom = 0
 left_right = 0
+
+[TypeLibrary]
+; Type library root directories for resolving FB types in network diagrams.
+; Use path, path2, path3, ... for multiple directories.
+; CLI --type-lib arguments are appended to these paths.
+path = /path/to/your/type/library
+path2 = /path/to/another/library
 ```
 
 ### Requirements
@@ -150,7 +157,7 @@ left_right = 0
 
 ## Fonts
 
-The `tgl/` directory contains TGL fonts (technical drawing standard) licensed under the [SIL Open Font License](tgl/Open%20Font%20License.txt). Install `TGL 0-17.ttf` (regular) and `TGL 0-16.ttf` (italic) for best results.
+The `tgl/` directory contains TGL fonts (technical drawing standard) licensed under the [SIL Open Font License](tgl/Open%20Font%20License.txt). Install `TGL 0-17_std.ttf` (regular) and `TGL 0-16_std.ttf` (italic) for best results.
 
 ## License
 
