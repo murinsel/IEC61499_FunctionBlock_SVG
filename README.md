@@ -126,7 +126,7 @@ Requires `jsdom` (`npm install jsdom`).
 
 ### Settings File (`block_size_settings.ini`)
 
-Controls block rendering dimensions in network diagrams:
+Controls block rendering dimensions and type library paths for network diagrams:
 
 ```ini
 [BlockSize]
@@ -157,7 +157,7 @@ path2 = /path/to/another/library
 
 ## Fonts
 
-The `tgl/` directory contains TGL fonts (technical drawing standard) licensed under the [SIL Open Font License](tgl/Open%20Font%20License.txt). Install `TGL 0-17.ttf` (regular) and `TGL 0-16.ttf` (italic) for best results.
+The `tgl/` directory contains TGL fonts (technical drawing standard) licensed under the [SIL Open Font License](tgl/Open%20Font%20License.txt). Install `TGL 0-17_std.ttf` (regular) and `TGL 0-16_std.ttf` (italic) for best results.
 
 ## License
 
