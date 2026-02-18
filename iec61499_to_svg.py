@@ -244,12 +244,12 @@ class SVGRenderer:
     # Colors (from 4diac IDE plugin.xml)
     BLOCK_STROKE_COLOR = "#A0A0A0"  # Light gray for block outline
     EVENT_PORT_COLOR = "#63B31F"    # Green for event ports (99,179,31)
-    BOOL_PORT_COLOR = "#9FA48A"     # Muted green-gray for BOOL (159,164,138)
+    BOOL_PORT_COLOR = "#A3B08F"     # Muted green-gray for BOOL (163,176,143)
     ANY_BIT_PORT_COLOR = "#82A3A9"  # Blue-gray for ANY_BIT types (130,163,169)
     ANY_INT_PORT_COLOR = "#18519E"  # Dark blue for ANY_INT types (24,81,158)
     ANY_REAL_PORT_COLOR = "#DBB418" # Gold for ANY_REAL types (219,180,24)
     STRING_PORT_COLOR = "#BD8663"   # Brown for string types (189,134,99)
-    DATA_PORT_COLOR = "#0000FF"     # Blue for generic data (0,0,255)
+    DATA_PORT_COLOR = "#3366FF"     # Blue for generic data (51,102,255)
     ADAPTER_PORT_COLOR = "#845DAF"  # Purple for adapter ports (132,93,175)
 
     # Type name sets for color mapping

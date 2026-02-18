@@ -61,7 +61,7 @@ TypeResolver indexes `.fbt/.sub/.adp` files by basename and namespace path (`::`
 
 ## Key Constants
 
-Port colors match 4diac IDE: Event `#63B31F`, BOOL `#9FA48A`, Integer `#18519E`, Real `#DBB418`, String `#BD8663`, Bit `#82A3A9`, Adapter `#845DAF`, Other `#0000FF`.
+Port colors match 4diac IDE: Event `#63B31F`, BOOL `#A3B08F`, Integer `#18519E`, Real `#DBB418`, String `#BD8663`, Bit `#82A3A9`, Adapter `#845DAF`, Other `#3366FF`.
 
 Font stack: `TGL, 'Times New Roman', Times, serif` with `@font-face` declarations for TGL 0-17 (regular) and TGL 0-16 (italic). Fonts in `tgl/` directory.
 
