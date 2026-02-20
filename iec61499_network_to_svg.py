@@ -846,7 +846,7 @@ class NetworkLayoutEngine:
     #   by retina measurement: all 9 pairwise Y-axis checks give exactly 0.15)
     PORT_ROW_HEIGHT = 17
     BLOCK_PADDING = 10
-    NAME_SECTION_HEIGHT = 17
+    NAME_SECTION_HEIGHT = 14  # notch height matching 4diac IDE
     BLOCK_MARGIN_PX = 2       # SWT GridLayout margins: marginHeight=1 per section, net +2
     INSTANCE_LABEL_HEIGHT = 15  # Coordinate-system lineHeight (Menlo-12: 15px)
     CONNECTOR_WIDTH = 10
@@ -956,10 +956,10 @@ class NetworkLayoutEngine:
         # The BLOCK_MARGIN_PX (2) comes from SWT GridLayout margins
         # (marginHeight=1 per section, verticalSpacing=-1 between sections).
         port_rows = num_event_rows + num_data_rows + num_adapter_rows
-        inst.block_height = (port_rows + 1) * self.PORT_ROW_HEIGHT + self.BLOCK_MARGIN_PX
+        inst.block_height = (port_rows + 1) * self.PORT_ROW_HEIGHT + self.BLOCK_MARGIN_PX + 2  # +2 bottom padding
 
-        inst.event_section_height = num_event_rows * self.PORT_ROW_HEIGHT
-        inst.data_section_height = num_data_rows * self.PORT_ROW_HEIGHT if num_data_rows > 0 else 0
+        inst.event_section_height = num_event_rows * self.PORT_ROW_HEIGHT + 4  # +2 top + 2 bottom padding
+        inst.data_section_height = (num_data_rows * self.PORT_ROW_HEIGHT + 1) if num_data_rows > 0 else 0  # +1 top padding
         inst.adapter_section_height = num_adapter_rows * self.PORT_ROW_HEIGHT if num_adapter_rows > 0 else 0
 
         # Width calculation
@@ -967,11 +967,11 @@ class NetworkLayoutEngine:
         # Name section shows only the type name with icon.
         short_type = inst.type_name.split("::")[-1] if "::" in inst.type_name else inst.type_name
         short_type = _truncate_label(short_type, self.settings.max_type_label_size)
-        notch = 8
-        icon_w = 14
-        gap_icon_text = 4
+        notch = 9              # 4diac FB_NOTCH_INSET = 9
+        icon_w = 16             # 4diac standard SWT icon size 16x16
+        gap_icon_text = 2       # 4diac setIconTextGap(2)
         type_width = self._measure_text(short_type, italic=True)
-        name_section_width = notch + 1 + icon_w + gap_icon_text + type_width + 5 + notch
+        name_section_width = notch + 3 + icon_w + gap_icon_text + type_width + 3 + notch  # 3 = GridLayout marginWidth
 
         triangle_space = self.TRIANGLE_WIDTH + 1 + 1.5
         adapter_space = self.TRIANGLE_WIDTH * 2 + 1 + 1.5
@@ -1039,7 +1039,7 @@ class NetworkLayoutEngine:
     def _compute_port_positions(self, inst: FBInstance):
         """Compute absolute (x, y) for each port on an instance."""
         # Event inputs (left side) – centered in each row
-        y = self.PORT_ROW_HEIGHT / 2
+        y = 2 + self.PORT_ROW_HEIGHT / 2  # 2px top padding
         for port in inst.event_inputs:
             abs_x = inst.render_x
             abs_y = inst.render_y + y
@@ -1047,7 +1047,7 @@ class NetworkLayoutEngine:
             y += self.PORT_ROW_HEIGHT
 
         # Event outputs (right side)
-        y = self.PORT_ROW_HEIGHT / 2
+        y = 2 + self.PORT_ROW_HEIGHT / 2  # 2px top padding
         for port in inst.event_outputs:
             abs_x = inst.render_x + inst.block_width
             abs_y = inst.render_y + y
@@ -1056,7 +1056,7 @@ class NetworkLayoutEngine:
 
         # Data inputs (left side)
         base_y = inst.name_section_bottom
-        y = base_y + self.PORT_ROW_HEIGHT / 2
+        y = base_y + 1 + self.PORT_ROW_HEIGHT / 2  # 1px top padding
         for port in inst.data_inputs:
             abs_x = inst.render_x
             abs_y = inst.render_y + y
@@ -1064,7 +1064,7 @@ class NetworkLayoutEngine:
             y += self.PORT_ROW_HEIGHT
 
         # Data outputs (right side)
-        y = base_y + self.PORT_ROW_HEIGHT / 2
+        y = base_y + 1 + self.PORT_ROW_HEIGHT / 2  # 1px top padding
         for port in inst.data_outputs:
             abs_x = inst.render_x + inst.block_width
             abs_y = inst.render_y + y
@@ -1324,7 +1324,7 @@ class NetworkLayoutEngine:
         content_top = min(all_y)
         content_bottom = max(all_y)
 
-        border_pad_v = 120  # vertical padding (top/bottom) between content extent and header/border
+        border_pad_v = 117  # vertical padding (top/bottom) between content extent and header/border
 
         # 4diac IDE enforces a minimum network area size (2224×1148 retina → 1112×574 CSS px).
         # This is the INNER area between sidebars and below the header.
@@ -1656,7 +1656,7 @@ class NetworkSVGRenderer:
     # Layout – must match NetworkLayoutEngine constants
     PORT_ROW_HEIGHT = 17
     BLOCK_PADDING = 10
-    NAME_SECTION_HEIGHT = 17
+    NAME_SECTION_HEIGHT = 14  # notch height matching 4diac IDE
     TRIANGLE_WIDTH = 5
     TRIANGLE_HEIGHT = 10
 
@@ -2082,8 +2082,8 @@ class NetworkSVGRenderer:
         return "\n".join(parts)
 
     def _render_block_outline(self, inst: FBInstance) -> str:
-        notch = 8
-        r = 3
+        notch = 9   # 4diac FB_NOTCH_INSET = 9
+        r = 3       # 4diac CORNER_DIM = 6 (diameter), radius = 3
         et = inst.event_section_height
         nb = inst.name_section_bottom
         w = inst.block_width
@@ -2141,15 +2141,15 @@ class NetworkSVGRenderer:
         else:
             icon_letter = "B"
 
-        # Icon dimensions
-        icon_w = 14
-        icon_h = 14
+        # Icon dimensions (4diac standard SWT icon 16x16)
+        icon_w = 16
+        icon_h = 16
         icon_notch_depth = 1.5
         icon_r = 1
 
         # Calculate content width to center icon + type name between notches
-        notch = 8
-        gap_icon_text = 4
+        notch = 9              # 4diac FB_NOTCH_INSET = 9
+        gap_icon_text = 2      # 4diac setIconTextGap(2)
         type_width = self._measure_text(short_type, italic=True)
         total_content_width = icon_w + gap_icon_text + type_width
         # Center within the area between the two notch indents
@@ -2265,13 +2265,13 @@ class NetworkSVGRenderer:
         parts = []
 
         # Event inputs (left side) – centered in each row
-        y = self.PORT_ROW_HEIGHT / 2
+        y = 2 + self.PORT_ROW_HEIGHT / 2  # 2px top padding
         for port in inst.event_inputs:
             parts.append(self._render_port_left(port, y, self.EVENT_PORT_COLOR, is_event=True))
             y += self.PORT_ROW_HEIGHT
 
         # Event outputs (right side)
-        y = self.PORT_ROW_HEIGHT / 2
+        y = 2 + self.PORT_ROW_HEIGHT / 2  # 2px top padding
         for port in inst.event_outputs:
             parts.append(self._render_port_right(port, y, inst.block_width, self.EVENT_PORT_COLOR, is_event=True))
             y += self.PORT_ROW_HEIGHT
@@ -2283,14 +2283,14 @@ class NetworkSVGRenderer:
         base_y = inst.name_section_bottom
 
         # Data inputs (left side)
-        y = base_y + self.PORT_ROW_HEIGHT / 2
+        y = base_y + 1 + self.PORT_ROW_HEIGHT / 2  # 1px top padding
         for port in inst.data_inputs:
             color = self._get_port_color(port.port_type)
             parts.append(self._render_port_left(port, y, color))
             y += self.PORT_ROW_HEIGHT
 
         # Data outputs (right side)
-        y = base_y + self.PORT_ROW_HEIGHT / 2
+        y = base_y + 1 + self.PORT_ROW_HEIGHT / 2  # 1px top padding
         for port in inst.data_outputs:
             color = self._get_port_color(port.port_type)
             parts.append(self._render_port_right(port, y, inst.block_width, color))
@@ -2308,12 +2308,12 @@ class NetworkSVGRenderer:
         # Build port name → local y lookup for all input ports
         port_y_map: Dict[str, float] = {}
         # Event inputs
-        y = self.PORT_ROW_HEIGHT / 2
+        y = 2 + self.PORT_ROW_HEIGHT / 2  # 2px top padding
         for port in inst.event_inputs:
             port_y_map[port.name] = y
             y += self.PORT_ROW_HEIGHT
         # Data inputs
-        y = inst.name_section_bottom + self.PORT_ROW_HEIGHT / 2
+        y = inst.name_section_bottom + 1 + self.PORT_ROW_HEIGHT / 2  # 1px top padding
         for port in inst.data_inputs:
             port_y_map[port.name] = y
             y += self.PORT_ROW_HEIGHT
