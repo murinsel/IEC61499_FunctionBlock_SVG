@@ -752,7 +752,7 @@ class NetworkLayoutEngine {
         //   confirmed by retina measurement: all 9 pairwise Y-axis checks give exactly 0.15)
         this.PORT_ROW_HEIGHT = 17;
         this.BLOCK_PADDING = 10;
-        this.NAME_SECTION_HEIGHT = 17;
+        this.NAME_SECTION_HEIGHT = 14; // notch height matching 4diac IDE
         this.BLOCK_MARGIN_PX = 2;        // SWT GridLayout margins: marginHeight=1 per section, net +2
         this.INSTANCE_LABEL_HEIGHT = 15;  // Coordinate-system lineHeight (Menlo-12: 15px)
         this.TRIANGLE_WIDTH = 5;
@@ -806,21 +806,21 @@ class NetworkLayoutEngine {
         //   (portRows + 1) * lineHeight + BLOCK_MARGIN_PX
         // The +1 is for the notch/name section (one lineHeight).
         // BLOCK_MARGIN_PX (2) comes from SWT GridLayout margins.
-        inst.eventSectionHeight = numEventRows * this.PORT_ROW_HEIGHT;
-        inst.dataSectionHeight = numDataRows > 0 ? numDataRows * this.PORT_ROW_HEIGHT : 0;
+        inst.eventSectionHeight = numEventRows * this.PORT_ROW_HEIGHT + 4;  // +2 top + 2 bottom padding
+        inst.dataSectionHeight = numDataRows > 0 ? numDataRows * this.PORT_ROW_HEIGHT + 1 : 0;  // +1 top padding
         inst.adapterSectionHeight = numAdapterRows > 0 ? numAdapterRows * this.PORT_ROW_HEIGHT : 0;
 
         const portRows = numEventRows + numDataRows + numAdapterRows;
-        inst.blockHeight = (portRows + 1) * this.PORT_ROW_HEIGHT + this.BLOCK_MARGIN_PX;
+        inst.blockHeight = (portRows + 1) * this.PORT_ROW_HEIGHT + this.BLOCK_MARGIN_PX + 2;  // +2 bottom padding
 
         let shortType = inst.typeName.includes("::") ? inst.typeName.split("::").pop() : inst.typeName;
         shortType = _truncateLabel(shortType, this.settings.maxTypeLabelSize);
-        const notch = 8;
-        const iconW = 14;
-        const gapIconText = 4;
+        const notch = 9;           // 4diac FB_NOTCH_INSET = 9
+        const iconW = 16;          // 4diac standard SWT icon size 16x16
+        const gapIconText = 2;     // 4diac setIconTextGap(2)
 
         const typeWidth = this._measureText(shortType, true);
-        const typeSectionW = notch + 1 + iconW + gapIconText + typeWidth + 5 + notch;
+        const typeSectionW = notch + 3 + iconW + gapIconText + typeWidth + 3 + notch;  // 3 = GridLayout marginWidth
 
         const triSpace = this.TRIANGLE_WIDTH + 1 + 1.5;
         const adpSpace = this.TRIANGLE_WIDTH * 2 + 1 + 1.5;
@@ -880,14 +880,14 @@ class NetworkLayoutEngine {
 
     _computePortPositions(inst) {
         // Event inputs – centered in each row
-        let y = this.PORT_ROW_HEIGHT / 2;
+        let y = 2 + this.PORT_ROW_HEIGHT / 2;  // 2px top padding
         for (const p of inst.eventInputs) {
             inst.portPositions[p.name] = [inst.renderX, inst.renderY + y];
             y += this.PORT_ROW_HEIGHT;
         }
 
         // Event outputs
-        y = this.PORT_ROW_HEIGHT / 2;
+        y = 2 + this.PORT_ROW_HEIGHT / 2;  // 2px top padding
         for (const p of inst.eventOutputs) {
             inst.portPositions[p.name] = [inst.renderX + inst.blockWidth, inst.renderY + y];
             y += this.PORT_ROW_HEIGHT;
@@ -895,14 +895,14 @@ class NetworkLayoutEngine {
 
         // Data inputs
         const baseY = inst.nameSectionBottom;
-        y = baseY + this.PORT_ROW_HEIGHT / 2;
+        y = baseY + 1 + this.PORT_ROW_HEIGHT / 2;  // 1px top padding
         for (const p of inst.dataInputs) {
             inst.portPositions[p.name] = [inst.renderX, inst.renderY + y];
             y += this.PORT_ROW_HEIGHT;
         }
 
         // Data outputs
-        y = baseY + this.PORT_ROW_HEIGHT / 2;
+        y = baseY + 1 + this.PORT_ROW_HEIGHT / 2;  // 1px top padding
         for (const p of inst.dataOutputs) {
             inst.portPositions[p.name] = [inst.renderX + inst.blockWidth, inst.renderY + y];
             y += this.PORT_ROW_HEIGHT;
@@ -1137,7 +1137,7 @@ class NetworkLayoutEngine {
         const contentTop = Math.min(...allY);
         let contentBottom = Math.max(...allY);
 
-        const borderPadV = 120; // vertical padding (top/bottom) between content extent and header/border
+        const borderPadV = 117; // vertical padding (top/bottom) between content extent and header/border
 
         // 4diac IDE enforces a minimum network area size (2224×1148 retina → 1112×574 CSS px).
         // This is the INNER area between sidebars and below the header.
@@ -1804,7 +1804,7 @@ class NetworkSVGRenderer {
     }
 
     _renderBlockOutline(inst) {
-        const notch = 8, r = 3;
+        const notch = 9, r = 3;  // 4diac FB_NOTCH_INSET=9, CORNER_DIM=6 (diameter), radius=3
         const et = inst.eventSectionHeight;
         const nb = inst.nameSectionBottom;
         const w = inst.blockWidth, h = inst.blockHeight;
@@ -1841,11 +1841,11 @@ class NetworkSVGRenderer {
         else if (inst.fbType === "SubApp") iconLetter = "S";
         else iconLetter = "B";
 
-        const iconW = 14, iconH = 14, iconR = 1, iconND = 1.5;
-        const gapIconText = 4;
+        const iconW = 16, iconH = 16, iconR = 1, iconND = 1.5;  // 4diac SWT icon 16x16
+        const gapIconText = 2;     // 4diac setIconTextGap(2)
 
         // Calculate content width to center icon + type name between notches
-        const notch = 8;
+        const notch = 9;           // 4diac FB_NOTCH_INSET = 9
         const typeTextWidth = this._measureText(shortType, true);
         const totalContentWidth = iconW + gapIconText + typeTextWidth;
         const contentStartX = notch + ((w - 2 * notch) - totalContentWidth) / 2;
@@ -1915,13 +1915,13 @@ class NetworkSVGRenderer {
     _renderEventPorts(inst) {
         const parts = [];
         // Event inputs – centered in each row
-        let y = this.PORT_ROW_HEIGHT / 2;
+        let y = 2 + this.PORT_ROW_HEIGHT / 2;  // 2px top padding
         for (const p of inst.eventInputs) {
             parts.push(this._renderPortLeft(p, y, this.EVENT_PORT_COLOR));
             y += this.PORT_ROW_HEIGHT;
         }
 
-        y = this.PORT_ROW_HEIGHT / 2;
+        y = 2 + this.PORT_ROW_HEIGHT / 2;  // 2px top padding
         for (const p of inst.eventOutputs) {
             parts.push(this._renderPortRight(p, y, inst.blockWidth, this.EVENT_PORT_COLOR));
             y += this.PORT_ROW_HEIGHT;
@@ -1934,13 +1934,13 @@ class NetworkSVGRenderer {
         const parts = [];
         const baseY = inst.nameSectionBottom;
 
-        let y = baseY + this.PORT_ROW_HEIGHT / 2;
+        let y = baseY + 1 + this.PORT_ROW_HEIGHT / 2;  // 1px top padding
         for (const p of inst.dataInputs) {
             parts.push(this._renderPortLeft(p, y, this._getPortColor(p.portType)));
             y += this.PORT_ROW_HEIGHT;
         }
 
-        y = baseY + this.PORT_ROW_HEIGHT / 2;
+        y = baseY + 1 + this.PORT_ROW_HEIGHT / 2;  // 1px top padding
         for (const p of inst.dataOutputs) {
             parts.push(this._renderPortRight(p, y, inst.blockWidth, this._getPortColor(p.portType)));
             y += this.PORT_ROW_HEIGHT;
@@ -1957,13 +1957,13 @@ class NetworkSVGRenderer {
         // Build port name → local y lookup for all input ports
         const portYMap = {};
         // Event inputs
-        let y = this.PORT_ROW_HEIGHT / 2;
+        let y = 2 + this.PORT_ROW_HEIGHT / 2;  // 2px top padding
         for (const p of inst.eventInputs) {
             portYMap[p.name] = y;
             y += this.PORT_ROW_HEIGHT;
         }
         // Data inputs
-        y = inst.nameSectionBottom + this.PORT_ROW_HEIGHT / 2;
+        y = inst.nameSectionBottom + 1 + this.PORT_ROW_HEIGHT / 2;  // 1px top padding
         for (const p of inst.dataInputs) {
             portYMap[p.name] = y;
             y += this.PORT_ROW_HEIGHT;
