@@ -87,11 +87,20 @@ function _truncateLabel(text, maxLen) {
     return text.substring(0, maxLen) + "\u2026";
 }
 
+const _NUMERIC_LITERAL_RE = /^[+-]?\d+(\.\d+)?([eE][+-]?\d+)?$/;
+
 function _formatParameterValue(value, portType) {
-    // Ensure IEC 61131-3 typed literal notation (TYPE#value).
-    // If the value already has a type prefix, keep it; otherwise prepend portType.
+    // Only bare numeric literals are ambiguous enough to need a type prefix
+    // (5 could be INT, DINT, REAL, ...), so only those get one - e.g. 5 ->
+    // INT#5. A value that already carries a type prefix is kept as-is (e.g.
+    // WSTRING#"OK"). Symbolic constants - named identifiers such as an I/O
+    // binding name or an enum member - already have a self-evident type and
+    // are shown bare (Output_Q1, TRUE), matching 4diac IDE itself. Without
+    // this, a symbolic value whose declared port type is a namespaced domain
+    // type gets prefixed with that whole namespaced string and truncated
+    // into gibberish.
     // Returns plain text (not XML-escaped) so truncation can be applied safely.
-    if (!value.includes('#') && portType) {
+    if (!value.includes('#') && portType && _NUMERIC_LITERAL_RE.test(value)) {
         value = portType + '#' + value;
     }
     return value;

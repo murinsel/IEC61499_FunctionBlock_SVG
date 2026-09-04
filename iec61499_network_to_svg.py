@@ -13,6 +13,7 @@ __version__ = "1.0.1"
 import xml.etree.ElementTree as ET
 import argparse
 import configparser
+import re
 import sys
 import os
 from pathlib import Path
@@ -248,17 +249,24 @@ def _truncate_label(text: str, max_len: int) -> str:
     return text[:max_len] + "…"
 
 
+_NUMERIC_LITERAL_RE = re.compile(r'^[+-]?\d+(\.\d+)?([eE][+-]?\d+)?$')
+
+
 def _format_parameter_value(value: str, port_type: str = "") -> str:
     """Format an IEC 61131-3 typed literal for display.
 
-    Ensures the value has a type prefix in IEC 61131-3 notation (TYPE#value).
-    If the value already contains a type prefix it is kept as-is.
-    Otherwise the port_type is prepended.
-    Examples: WSTRING#"OK" → WSTRING#"OK", TRUE → BOOL#TRUE, '/' → STRING#'/'
+    Only bare numeric literals are ambiguous enough to need a type prefix
+    (5 could be INT, DINT, REAL, ...), so only those get one - e.g. 5 →
+    INT#5. A value that already carries a type prefix is kept as-is (e.g.
+    WSTRING#"OK"). Symbolic constants - named identifiers such as an I/O
+    binding name or an enum member - already have a self-evident type and
+    are shown bare (Output_Q1, TRUE), matching how 4diac IDE itself displays
+    them. Without this, a symbolic value whose declared port type is a
+    namespaced domain type (e.g. an I/O-binding pseudo-type) gets prefixed
+    with that whole namespaced string and then truncated into gibberish.
     Note: Returns plain text (not XML-escaped) so truncation can be applied safely.
     """
-    # If value already has a type prefix, keep it
-    if '#' not in value and port_type:
+    if '#' not in value and port_type and _NUMERIC_LITERAL_RE.match(value):
         value = f"{port_type}#{value}"
     return value
 
