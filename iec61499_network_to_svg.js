@@ -34,6 +34,13 @@ class BlockSizeSettings {
         this.font = overrides.font ?? overrides.family ?? null;
         this.fontItalic = overrides.fontItalic ?? overrides.family_italic ?? null;
         this.fontSize = overrides.fontSize ?? overrides.size ?? null;
+        // If set (and font/fontItalic are NOT), the bundled TGL @font-face
+        // blocks get a url() fallback pointing at a font file hosted once,
+        // instead of embedding it per SVG. Fixes viewers without TGL
+        // installed as a system font silently falling through to a wider
+        // fallback font and overflowing the reserved space.
+        this.tglFontUrl = overrides.tglFontUrl ?? overrides.tgl_font_url ?? null;
+        this.tglFontUrlItalic = overrides.tglFontUrlItalic ?? overrides.tgl_font_url_italic ?? null;
     }
 }
 
@@ -69,7 +76,8 @@ function loadBlockSizeSettings(iniText) {
             if (key === "size") {
                 const n = parseInt(valStr, 10);
                 if (!isNaN(n)) settings.size = n;
-            } else if (key === "family" || key === "family_italic") {
+            } else if (key === "family" || key === "family_italic" ||
+                       key === "tgl_font_url" || key === "tgl_font_url_italic") {
                 settings[key] = valStr;
             }
         } else {
@@ -1434,6 +1442,56 @@ class ConnectionRouter {
 // ===========================================================================
 
 class NetworkSVGRenderer {
+    // FONT_FACE_STYLE with a url() fallback for viewers that don't have TGL
+    // installed as a system font (local() then resolves to nothing, and the
+    // browser silently falls through to the family stack's next font -
+    // usually a wider one, e.g. Times New Roman - which then overflows the
+    // space measured/reserved for the narrower TGL glyphs). The url() points
+    // at one font file hosted once (e.g. under a docs site's _static/), not
+    // embedded per SVG.
+    static _fontFaceStyleWithUrls(regularUrl, italicUrl) {
+        // regularUrl/italicUrl land inside a CSS string (double-quoted
+        // url("...")) that is itself XML text content, so escape for both
+        // nested contexts: CSS string escaping first (backslash and the
+        // literal quote that would otherwise close the CSS string early),
+        // then XML-escape the result for the surrounding <style> element.
+        // Either URL may be absent (hosting only one of the two faces) -
+        // fall back to a local()-only src for that face rather than
+        // skipping the url() fallback for both.
+        const cssEscape = (s) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        const src = (localNames, url) => {
+            const locals = localNames.map((n) => `local("${n}")`).join(', ');
+            return url ? `${locals}, url("${_xmlEscape(cssEscape(url))}") format("truetype")` : locals;
+        };
+        return `
+  <style>
+    @font-face {
+      font-family: "TGL 0-17_std";
+      src: ${src(['TGL 0-17_std'], regularUrl)};
+      font-style: normal;
+      font-weight: normal;
+    }
+    @font-face {
+      font-family: "TGL 0-17";
+      src: ${src(['TGL 0-17', 'TGL 0-17 alt'], regularUrl)};
+      font-style: normal;
+      font-weight: normal;
+    }
+    @font-face {
+      font-family: "TGL 0-16_std";
+      src: ${src(['TGL 0-16_std'], italicUrl)};
+      font-style: normal;
+      font-weight: normal;
+    }
+    @font-face {
+      font-family: "TGL 0-16";
+      src: ${src(['TGL 0-16'], italicUrl)};
+      font-style: normal;
+      font-weight: normal;
+    }
+  </style>`;
+    }
+
     constructor(options = {}) {
         this.showShadow = options.showShadow !== false;
         this.showGrid = options.showGrid || false;
@@ -1490,6 +1548,10 @@ class NetworkSVGRenderer {
             // The @font-face block only maps the TGL faces; drop it once TGL is
             // no longer referenced, or it misdirects the renderer.
             this.FONT_FACE_STYLE = '';
+        } else if (!this.settings.font && !this.settings.fontItalic &&
+            (this.settings.tglFontUrl || this.settings.tglFontUrlItalic)) {
+            this.FONT_FACE_STYLE = NetworkSVGRenderer._fontFaceStyleWithUrls(
+                this.settings.tglFontUrl, this.settings.tglFontUrlItalic || this.settings.tglFontUrl);
         }
 
         this.BLOCK_STROKE_COLOR = "#A0A0A0";
@@ -2269,6 +2331,38 @@ class NetworkSVGRenderer {
 // ===========================================================================
 
 /**
+ * Register the hosted TGL fonts with the document's font system before
+ * measuring/rendering, for real-browser callers using tglFontUrl.
+ *
+ * Canvas text measurement (used during layout, run before the generated SVG
+ * - and its own @font-face url() - even exists) only resolves the actual,
+ * correctly-metriced TGL glyphs if "TGL 0-17_std"/"TGL 0-16_std" are already
+ * registered with the page's document.fonts. Node/Python don't have this
+ * problem (they measure the font file directly), but in a real browser,
+ * without this, layout measures in whatever the font-family stack's next
+ * available font is (typically wider than TGL for these labels) while the
+ * final SVG still renders in the narrower TGL once its own url() is
+ * fetched - so boxes end up oversized rather than pixel-perfect.
+ *
+ * Optional: only worth calling in a real browser when tglFontUrl is set and
+ * you want measurement to exactly match the final rendered font. A no-op
+ * (resolves immediately) anywhere else, including Node.
+ *
+ * @param {string} regularUrl - same URL passed as tglFontUrl
+ * @param {string} [italicUrl] - same URL passed as tglFontUrlItalic
+ * @returns {Promise<void>}
+ */
+async function preloadTglFonts(regularUrl, italicUrl) {
+    if (typeof document === 'undefined' || !document.fonts) return;
+    const cssEscape = (s) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const regular = new FontFace('TGL 0-17_std', `url("${cssEscape(regularUrl)}")`);
+    const italic = new FontFace('TGL 0-16_std', `url("${cssEscape(italicUrl || regularUrl)}")`);
+    const [loadedRegular, loadedItalic] = await Promise.all([regular.load(), italic.load()]);
+    document.fonts.add(loadedRegular);
+    document.fonts.add(loadedItalic);
+}
+
+/**
  * Convert IEC 61499 network XML to SVG
  * @param {string} xmlString - The XML content
  * @param {Object} options - Rendering options
@@ -2298,7 +2392,7 @@ function convertNetworkToSvg(xmlString, options = {}) {
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-        convertNetworkToSvg,
+        convertNetworkToSvg, preloadTglFonts,
         NetworkParser, TypeResolver, NetworkLayoutEngine, ConnectionRouter, NetworkSVGRenderer,
         NetworkModel, FBInstance, Connection, InterfacePort, Port,
         BlockSizeSettings, loadBlockSizeSettings, _truncateLabel, VERSION
