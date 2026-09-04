@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: this workflow only reads the repo and runs tests, it
+# never needs to write anything. Also stops actions/checkout from
+# persisting the token in the runner's local git config (defense in depth
+# against a malicious script in the checked-out code reading it back out).
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install optional dependency (Pillow)
+        run: pip install Pillow
+      - name: Syntax check
+        run: |
+          python -m py_compile iec61499_to_svg.py
+          python -m py_compile iec61499_network_to_svg.py
+      - name: Render fixtures
+        run: |
+          python iec61499_to_svg.py tests/fixtures/ExampleFB.fbt -o /tmp/py_ExampleFB.svg
+          python iec61499_network_to_svg.py tests/fixtures/E_N_TABLE.fbt -o /tmp/py_E_N_TABLE.svg
+      - name: Validate output is well-formed XML
+        run: |
+          python -c "import xml.etree.ElementTree as ET; ET.parse('/tmp/py_ExampleFB.svg')"
+          python -c "import xml.etree.ElementTree as ET; ET.parse('/tmp/py_E_N_TABLE.svg')"
+      - uses: actions/upload-artifact@v4
+        if: matrix.python-version == '3.12'
+        with:
+          name: python-svgs
+          path: /tmp/py_*.svg
+
+  javascript:
+    name: JavaScript (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Install jsdom (DOMParser polyfill for the CLI)
+        # Pinned: jsdom 27+ requires Node >=20 and 28+ needs even newer
+        # patch versions, breaking the Node 18 matrix entry (and eventually
+        # 20 too) if left unpinned. 26.x is the last major supporting
+        # Node >=18 - matches the oldest version in the matrix below.
+        run: npm install jsdom@26.1.0
+      - name: Syntax check
+        run: |
+          node --check iec61499_to_svg.js
+          node --check iec61499_network_to_svg.js
+      - name: Render fixtures
+        run: |
+          node iec61499_to_svg.js tests/fixtures/ExampleFB.fbt -o /tmp/js_ExampleFB.svg
+          node iec61499_network_to_svg.js tests/fixtures/E_N_TABLE.fbt -o /tmp/js_E_N_TABLE.svg
+      - uses: actions/upload-artifact@v4
+        if: matrix.node-version == 22
+        with:
+          name: js-svgs
+          path: /tmp/js_*.svg
+
+  eslint:
+    name: JavaScript style (ESLint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run ESLint
+        run: npx --yes eslint@8 iec61499_to_svg.js iec61499_network_to_svg.js
+
+  version-consistency:
+    name: Version consistency (all 4 converters)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python tests/check_versions.py
+
+  parity:
+    name: Python/JS output parity
+    runs-on: ubuntu-latest
+    needs: [python, javascript]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pip install Pillow
+      - run: npm install jsdom@26.1.0  # kept in sync with the javascript job's pin
+      - name: Render the same fixtures with both languages
+        run: |
+          python iec61499_to_svg.py tests/fixtures/ExampleFB.fbt -o /tmp/py_ExampleFB.svg
+          node iec61499_to_svg.js tests/fixtures/ExampleFB.fbt -o /tmp/js_ExampleFB.svg
+          python iec61499_network_to_svg.py tests/fixtures/E_N_TABLE.fbt -o /tmp/py_E_N_TABLE.svg
+          node iec61499_network_to_svg.js tests/fixtures/E_N_TABLE.fbt -o /tmp/js_E_N_TABLE.svg
+      - name: Compare single-FB converter output
+        run: python tests/check_parity.py /tmp/py_ExampleFB.svg /tmp/js_ExampleFB.svg
+      - name: Compare network converter output
+        run: python tests/check_parity.py /tmp/py_E_N_TABLE.svg /tmp/js_E_N_TABLE.svg
