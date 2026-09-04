@@ -97,6 +97,50 @@ function _formatParameterValue(value, portType) {
     return value;
 }
 
+function _dottedFieldParams(inst) {
+    // Parameters that address a struct field of an existing DATA port (e.g.
+    // "OUT.u16ObjId" for output "OUT"), grouped by the port they belong to:
+    // [inExtra, outExtra], each a Map from a data port's name to the array
+    // of dotted-field parameter names for it, in parameter order.
+    //
+    // Each such parameter is not a value for the port itself - it's a whole
+    // extra row, shown immediately below the port it belongs to (matching
+    // 4diac IDE), since the port keeps its own plain name/pin on its own
+    // row. Used by both the layout engine (to size the block) and the
+    // renderer (to draw the same rows), so the two stay in lock-step.
+    const inNames = new Set(inst.dataInputs.map(p => p.name));
+    const outNames = new Set(inst.dataOutputs.map(p => p.name));
+    const inExtra = new Map(), outExtra = new Map();
+    for (const paramName of Object.keys(inst.parameters)) {
+        if (paramName.startsWith("__") || !paramName.includes(".")) continue;
+        const baseName = paramName.split(".")[0];
+        if (outNames.has(baseName)) {
+            if (!outExtra.has(baseName)) outExtra.set(baseName, []);
+            outExtra.get(baseName).push(paramName);
+        } else if (inNames.has(baseName)) {
+            if (!inExtra.has(baseName)) inExtra.set(baseName, []);
+            inExtra.get(baseName).push(paramName);
+        }
+    }
+    return [inExtra, outExtra];
+}
+
+function _dataRowSequence(ports, extraByPort) {
+    // Ordered rows for one side's data section: [["port", Port], ...] with
+    // each port's struct-field rows - [["field", paramName], ...] - spliced
+    // in immediately after it, instead of all fields trailing after every
+    // real port (which would misplace a field several rows below its own
+    // port whenever that port isn't the last one on its side).
+    const sequence = [];
+    for (const port of ports) {
+        sequence.push(["port", port]);
+        for (const fieldName of extraByPort.get(port.name) || []) {
+            sequence.push(["field", fieldName]);
+        }
+    }
+    return sequence;
+}
+
 function _xmlEscape(text) {
     return text
         .replace(/&/g, "&amp;")
@@ -676,27 +720,33 @@ class TypeResolver {
         const dataOutNames = [];
 
         for (const conn of model.connections) {
+            // "Instance.Port" addresses the port itself; "Instance.Port.Field"
+            // (a struct field) still means port "Port".
             const srcParts = conn.source.split(".");
             const dstParts = conn.destination.split(".");
 
-            if (srcParts.length === 2 && srcParts[0] === inst.name) {
+            if (srcParts.length >= 2 && srcParts[0] === inst.name) {
                 const portName = srcParts[1];
                 if (conn.connType === "event" && !eventOutNames.includes(portName)) eventOutNames.push(portName);
                 else if (conn.connType === "data" && !dataOutNames.includes(portName)) dataOutNames.push(portName);
             }
 
-            if (dstParts.length === 2 && dstParts[0] === inst.name) {
+            if (dstParts.length >= 2 && dstParts[0] === inst.name) {
                 const portName = dstParts[1];
                 if (conn.connType === "event" && !eventInNames.includes(portName)) eventInNames.push(portName);
                 else if (conn.connType === "data" && !dataInNames.includes(portName)) dataInNames.push(portName);
             }
         }
 
-        // Add parameter ports that aren't already in dataInNames
+        // Add parameter ports not already present. A parameter can also
+        // address a struct field of an existing OUTPUT (e.g. "OUT.u16ObjId"
+        // for output "OUT") - that's not a new input, it stays on the
+        // output side (see _renderParameterLabels), so skip it here.
         for (const paramName of Object.keys(inst.parameters)) {
-            if (!paramName.startsWith("__") && !dataInNames.includes(paramName) && !eventInNames.includes(paramName)) {
-                dataInNames.push(paramName);
-            }
+            if (paramName.startsWith("__") || dataInNames.includes(paramName) || eventInNames.includes(paramName)) continue;
+            const baseName = paramName.split(".")[0];
+            if (dataOutNames.includes(baseName) || eventOutNames.includes(baseName)) continue;
+            dataInNames.push(paramName);
         }
 
         inst.eventInputs = eventInNames.map(n => new Port(n, "Event"));
@@ -714,16 +764,18 @@ class TypeResolver {
         const connEI = [], connEO = [], connDI = [], connDO = [];
 
         for (const conn of model.connections) {
+            // "Instance.Port" addresses the port itself; "Instance.Port.Field"
+            // (a struct field) still means port "Port".
             const srcParts = conn.source.split(".");
             const dstParts = conn.destination.split(".");
 
-            if (srcParts.length === 2 && srcParts[0] === inst.name) {
+            if (srcParts.length >= 2 && srcParts[0] === inst.name) {
                 const portName = srcParts[1];
                 if (conn.connType === "event" && !connEO.includes(portName)) connEO.push(portName);
                 else if (conn.connType === "data" && !connDO.includes(portName)) connDO.push(portName);
             }
 
-            if (dstParts.length === 2 && dstParts[0] === inst.name) {
+            if (dstParts.length >= 2 && dstParts[0] === inst.name) {
                 const portName = dstParts[1];
                 if (conn.connType === "event" && !connEI.includes(portName)) connEI.push(portName);
                 else if (conn.connType === "data" && !connDI.includes(portName)) connDI.push(portName);
@@ -746,14 +798,20 @@ class TypeResolver {
         if (connDO.some(n => !typeDO.has(n)))
             inst.dataOutputs = connDO.map(n => new Port(n));
 
-        // Add parameter ports not already present
+        // Add parameter ports not already present. A parameter can also
+        // address a struct field of an existing OUTPUT (e.g. "OUT.u16ObjId"
+        // for output "OUT") - that's not a new input, it stays on the
+        // output side (see _renderParameterLabels), so skip it here.
         const existingDI = new Set(inst.dataInputs.map(p => p.name));
         const existingEI = new Set(inst.eventInputs.map(p => p.name));
+        const existingDO = new Set(inst.dataOutputs.map(p => p.name));
+        const existingEO = new Set(inst.eventOutputs.map(p => p.name));
         for (const paramName of Object.keys(inst.parameters)) {
-            if (!paramName.startsWith("__") && !existingDI.has(paramName) && !existingEI.has(paramName)) {
-                inst.dataInputs.push(new Port(paramName));
-                existingDI.add(paramName);
-            }
+            if (paramName.startsWith("__") || existingDI.has(paramName) || existingEI.has(paramName)) continue;
+            const baseName = paramName.split(".")[0];
+            if (existingDO.has(baseName) || existingEO.has(baseName)) continue;
+            inst.dataInputs.push(new Port(paramName));
+            existingDI.add(paramName);
         }
     }
 }
@@ -819,13 +877,17 @@ class NetworkLayoutEngine {
     _sizeInstance(inst) {
         const numEI = inst.eventInputs.length;
         const numEO = inst.eventOutputs.length;
-        const numDI = inst.dataInputs.length;
-        const numDO = inst.dataOutputs.length;
         const numSK = inst.sockets.length;
         const numPL = inst.plugs.length;
 
+        // A struct-field parameter (e.g. "OUT.u16ObjId" for output "OUT")
+        // gets its own extra row immediately below the port it belongs to.
+        const [inExtra, outExtra] = _dottedFieldParams(inst);
+        const inSeq = _dataRowSequence(inst.dataInputs, inExtra);
+        const outSeq = _dataRowSequence(inst.dataOutputs, outExtra);
+
         const numEventRows = Math.max(numEI, numEO, 1);
-        const numDataRows = Math.max(numDI, numDO);
+        const numDataRows = Math.max(inSeq.length, outSeq.length);
         const numAdapterRows = Math.max(numSK, numPL);
 
         // Visual block height matches SWT GridLayout preferred size:
@@ -860,6 +922,10 @@ class NetworkLayoutEngine {
         for (const p of inst.sockets) {
             maxLeft = Math.max(maxLeft, adpSpace + Math.max(minPinW, this._measureText(_truncateLabel(p.name, this.settings.maxPinLabelSize))));
         }
+        for (const [kind, item] of inSeq) {
+            if (kind !== "field") continue;
+            maxLeft = Math.max(maxLeft, triSpace + Math.max(minPinW, this._measureText(_truncateLabel(item, this.settings.maxPinLabelSize))));
+        }
 
         let maxRight = 0;
         for (const p of [...inst.eventOutputs, ...inst.dataOutputs]) {
@@ -867,6 +933,10 @@ class NetworkLayoutEngine {
         }
         for (const p of inst.plugs) {
             maxRight = Math.max(maxRight, adpSpace + Math.max(minPinW, this._measureText(_truncateLabel(p.name, this.settings.maxPinLabelSize))));
+        }
+        for (const [kind, item] of outSeq) {
+            if (kind !== "field") continue;
+            maxRight = Math.max(maxRight, triSpace + Math.max(minPinW, this._measureText(_truncateLabel(item, this.settings.maxPinLabelSize))));
         }
 
         const minCenterGap = 8;
@@ -919,18 +989,25 @@ class NetworkLayoutEngine {
             y += this.PORT_ROW_HEIGHT;
         }
 
-        // Data inputs
+        // Data inputs, with each struct-field parameter row (e.g.
+        // "OUT.u16ObjId") spliced in right after the port it belongs to -
+        // these are genuine connection endpoints in their own right, not
+        // just decoration (see _dottedFieldParams/_dataRowSequence).
         const baseY = inst.nameSectionBottom;
+        const [inExtra, outExtra] = _dottedFieldParams(inst);
+
         y = baseY + 1 + this.PORT_ROW_HEIGHT / 2;  // 1px top padding
-        for (const p of inst.dataInputs) {
-            inst.portPositions[p.name] = [inst.renderX, inst.renderY + y];
+        for (const [kind, item] of _dataRowSequence(inst.dataInputs, inExtra)) {
+            const name = kind === "port" ? item.name : item;
+            inst.portPositions[name] = [inst.renderX, inst.renderY + y];
             y += this.PORT_ROW_HEIGHT;
         }
 
         // Data outputs
         y = baseY + 1 + this.PORT_ROW_HEIGHT / 2;  // 1px top padding
-        for (const p of inst.dataOutputs) {
-            inst.portPositions[p.name] = [inst.renderX + inst.blockWidth, inst.renderY + y];
+        for (const [kind, item] of _dataRowSequence(inst.dataOutputs, outExtra)) {
+            const name = kind === "port" ? item.name : item;
+            inst.portPositions[name] = [inst.renderX + inst.blockWidth, inst.renderY + y];
             y += this.PORT_ROW_HEIGHT;
         }
 
@@ -1021,7 +1098,10 @@ class NetworkLayoutEngine {
             if (srcParts.length === 1 && inputPortNames.has(srcParts[0]) && conn.dx1 !== 0) {
                 const dx1Px = conn.dx1 * this.SCALE;
                 const dstParts = conn.destination.split(".");
-                if (dstParts.length === 2) {
+                // >= 2: "Instance.Port" or a struct-field "Instance.Port.Field"
+                // both address instance dstParts[0] - only the instance
+                // itself (not a specific port) matters for this calc.
+                if (dstParts.length >= 2) {
                     const dstInst = instanceMapTmp[dstParts[0]];
                     if (dstInst) {
                         const distToDest = dstInst.renderX - instMinX;
@@ -1044,7 +1124,7 @@ class NetworkLayoutEngine {
             if (srcParts.length === 1 && inputPortNames.has(srcParts[0]) && conn.dx1 !== 0) {
                 const dx1Px = conn.dx1 * this.SCALE;
                 const dstParts = conn.destination.split(".");
-                if (dstParts.length === 2) {
+                if (dstParts.length >= 2) {
                     const dstInst = instanceMapTmp[dstParts[0]];
                     if (dstInst) {
                         const turnX = inputSidebarRight + dx1Px;
@@ -1081,11 +1161,16 @@ class NetworkLayoutEngine {
             const dstParts = conn.destination.split(".");
             if (dstParts.length === 1 && outputPortNames.has(dstParts[0]) && conn.dx1 !== 0) {
                 const srcParts = conn.source.split(".");
-                if (srcParts.length === 2) {
+                // >= 2: a struct-field source ("Instance.Port.Field") has its
+                // own dedicated portPositions entry under the full qualified
+                // name (see _dottedFieldParams/_computePortPositions); fall
+                // back to the base port if there's no such dedicated row.
+                if (srcParts.length >= 2) {
                     const srcInst = instanceMapTmp[srcParts[0]];
-                    if (srcInst) {
-                        const portName = srcParts[1];
-                        if (srcInst.portPositions && srcInst.portPositions[portName]) {
+                    if (srcInst && srcInst.portPositions) {
+                        const qualifiedName = srcParts.slice(1).join(".");
+                        const portName = (qualifiedName in srcInst.portPositions) ? qualifiedName : srcParts[1];
+                        if (srcInst.portPositions[portName]) {
                             const srcX = srcInst.portPositions[portName][0];
                             const dx1Px = conn.dx1 * this.SCALE;
                             const turnX = srcX + dx1Px;
@@ -1388,10 +1473,19 @@ class ConnectionRouter {
     }
 
     _resolveEndpoint(endpoint, instanceMap, interfaceMap) {
+        // "Instance.Port" addresses the port itself. "Instance.Port.Field"
+        // (a struct field, e.g. F_MOVE.OUT.u16ObjId) has its own dedicated
+        // row - and its own position - when a Parameter declared that field
+        // (see _dottedFieldParams/_computePortPositions); fall back to the
+        // port itself if not.
         const parts = endpoint.split(".");
-        if (parts.length === 2) {
+        if (parts.length >= 2) {
             const inst = instanceMap[parts[0]];
-            if (inst && inst.portPositions[parts[1]]) return inst.portPositions[parts[1]];
+            if (inst) {
+                const qualifiedName = parts.slice(1).join(".");
+                if (inst.portPositions[qualifiedName]) return inst.portPositions[qualifiedName];
+                if (inst.portPositions[parts[1]]) return inst.portPositions[parts[1]];
+            }
             return null;
         } else if (parts.length === 1) {
             const ip = interfaceMap[parts[0]];
@@ -1565,7 +1659,7 @@ class NetworkSVGRenderer {
 
     _resolvePortType(endpoint, model, instanceMap) {
         const parts = endpoint.split(".");
-        if (parts.length === 2) {
+        if (parts.length >= 2) {
             const inst = instanceMap[parts[0]];
             if (inst) {
                 for (const p of [...inst.dataOutputs, ...inst.dataInputs]) {
@@ -1986,16 +2080,24 @@ class NetworkSVGRenderer {
     _renderDataPorts(inst) {
         const parts = [];
         const baseY = inst.nameSectionBottom;
+        const [inExtra, outExtra] = _dottedFieldParams(inst);
 
+        // Struct-field rows are skipped here (drawn by _renderParameterLabels
+        // instead) but still advance y, so a port after one lands on the
+        // row _computePortPositions gave it.
         let y = baseY + 1 + this.PORT_ROW_HEIGHT / 2;  // 1px top padding
-        for (const p of inst.dataInputs) {
-            parts.push(this._renderPortLeft(p, y, this._getPortColor(p.portType)));
+        for (const [kind, item] of _dataRowSequence(inst.dataInputs, inExtra)) {
+            if (kind === "port") {
+                parts.push(this._renderPortLeft(item, y, this._getPortColor(item.portType)));
+            }
             y += this.PORT_ROW_HEIGHT;
         }
 
         y = baseY + 1 + this.PORT_ROW_HEIGHT / 2;  // 1px top padding
-        for (const p of inst.dataOutputs) {
-            parts.push(this._renderPortRight(p, y, inst.blockWidth, this._getPortColor(p.portType)));
+        for (const [kind, item] of _dataRowSequence(inst.dataOutputs, outExtra)) {
+            if (kind === "port") {
+                parts.push(this._renderPortRight(item, y, inst.blockWidth, this._getPortColor(item.portType)));
+            }
             y += this.PORT_ROW_HEIGHT;
         }
 
@@ -2003,44 +2105,89 @@ class NetworkSVGRenderer {
     }
 
     _renderParameterLabels(inst) {
+        // A parameter usually names a data input directly (e.g. "QI") - its
+        // value is drawn as an external label to the left of that input's
+        // own row. It can also address a struct field of a data OUTPUT
+        // (e.g. "OUT.u16ObjId" for the u16ObjId member of output "OUT") -
+        // the port itself keeps its own plain row (rendered by
+        // _renderDataPorts), and this field gets its own extra row
+        // immediately below it, on the same side, matching 4diac IDE
+        // itself. Walks the same interleaved _dataRowSequence as
+        // _sizeInstance/_computePortPositions, so a field row lands on the
+        // exact row those reserved for it even when its port isn't the
+        // last one on its side.
         if (!inst.parameters || Object.keys(inst.parameters).length === 0) return "";
 
         const parts = [];
+        const tw = this.TRIANGLE_WIDTH, th = this.TRIANGLE_HEIGHT;
+        const [inExtra, outExtra] = _dottedFieldParams(inst);
 
-        // Build port name → local y lookup for all input ports
-        const portYMap = {};
-        // Event inputs
+        const renderFieldRow = (paramName, y, portType, isLeft) => {
+            const color = this._getPortColor(portType || "");
+            const textY = y + this.FONT_SIZE * 0.35;
+            const label = _truncateLabel(_xmlEscape(paramName), this.settings.maxPinLabelSize);
+            if (isLeft) {
+                const triPoints = `0,${y - th / 2} ${tw},${y} 0,${y + th / 2}`;
+                parts.push(`      <polygon points="${triPoints}" fill="${color}"/>`);
+                parts.push(
+                    `      <text x="${tw + 1}" y="${textY.toFixed(1)}"` +
+                    ` font-family="${this.FONT_FAMILY}" font-size="${this.FONT_SIZE}"` +
+                    ` fill="#000000">${label}</text>`);
+            } else {
+                const triX = inst.blockWidth - tw;
+                const triPoints = `${triX},${y - th / 2} ${triX + tw},${y} ${triX},${y + th / 2}`;
+                parts.push(`      <polygon points="${triPoints}" fill="${color}"/>`);
+                parts.push(
+                    `      <text x="${(inst.blockWidth - this.TRIANGLE_WIDTH - 1).toFixed(1)}" y="${textY.toFixed(1)}"` +
+                    ` font-family="${this.FONT_FAMILY}" font-size="${this.FONT_SIZE}"` +
+                    ` fill="#000000" text-anchor="end">${label}</text>`);
+            }
+        };
+
+        // Value labels for parameters that name an input port directly,
+        // plus struct-field rows on the input side, interleaved.
+        const inMap = {};
         let y = 2 + this.PORT_ROW_HEIGHT / 2;  // 2px top padding
         for (const p of inst.eventInputs) {
-            portYMap[p.name] = y;
+            inMap[p.name] = [y, "Event"];
             y += this.PORT_ROW_HEIGHT;
         }
-        // Data inputs
         y = inst.nameSectionBottom + 1 + this.PORT_ROW_HEIGHT / 2;  // 1px top padding
-        for (const p of inst.dataInputs) {
-            portYMap[p.name] = y;
+        for (const [kind, item] of _dataRowSequence(inst.dataInputs, inExtra)) {
+            if (kind === "port") {
+                inMap[item.name] = [y, item.portType];
+            } else {
+                const baseName = item.split(".")[0];
+                const port = inst.dataInputs.find(p => p.name === baseName);
+                renderFieldRow(item, y, port ? port.portType : "", true);
+            }
             y += this.PORT_ROW_HEIGHT;
         }
-
-        // Build port name → type lookup
-        const portTypeMap = {};
-        for (const p of inst.eventInputs) portTypeMap[p.name] = "Event";
-        for (const p of inst.dataInputs) portTypeMap[p.name] = p.portType;
 
         for (const [paramName, paramValue] of Object.entries(inst.parameters)) {
-            if (paramName.startsWith("__")) continue;
-            if (!(paramName in portYMap)) continue;
-            const py = portYMap[paramName];
-            const portType = portTypeMap[paramName] || "";
+            if (paramName.startsWith("__") || paramName.includes(".") || !paramValue) continue;
+            if (!(paramName in inMap)) continue;
+            const [py, portType] = inMap[paramName];
             let displayValue = _formatParameterValue(paramValue, portType);
             displayValue = _truncateLabel(displayValue, this.settings.maxValueLabelSize);
             displayValue = _xmlEscape(displayValue);
-            const textX = -3;
             const textY = py + this.FONT_SIZE * 0.35;
             parts.push(
-                `      <text x="${textX}" y="${textY.toFixed(1)}"` +
+                `      <text x="-3" y="${textY.toFixed(1)}"` +
                 ` font-family="${this.FONT_FAMILY}" font-size="${this.FONT_SIZE}"` +
                 ` fill="#000000" text-anchor="end">${displayValue}</text>`);
+        }
+
+        // Output side: struct-field rows only (a real output port never
+        // carries a plain external value label).
+        y = inst.nameSectionBottom + 1 + this.PORT_ROW_HEIGHT / 2;
+        for (const [kind, item] of _dataRowSequence(inst.dataOutputs, outExtra)) {
+            if (kind === "field") {
+                const baseName = item.split(".")[0];
+                const port = inst.dataOutputs.find(p => p.name === baseName);
+                renderFieldRow(item, y, port ? port.portType : "", false);
+            }
+            y += this.PORT_ROW_HEIGHT;
         }
 
         return parts.join("\n");

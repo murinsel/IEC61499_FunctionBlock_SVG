@@ -263,6 +263,48 @@ def _format_parameter_value(value: str, port_type: str = "") -> str:
     return value
 
 
+def _dotted_field_params(inst) -> tuple:
+    """Parameters that address a struct field of an existing data port
+    (e.g. "OUT.u16ObjId" for output "OUT"), grouped by the port they
+    belong to: (in_extra, out_extra), each a dict mapping a data port's
+    name to the list of dotted-field parameter names for it, in parameter
+    order.
+
+    Each such parameter is not a value for the port itself - it's a whole
+    extra row, shown immediately below the port it belongs to (matching
+    4diac IDE), since the port keeps its own plain name/pin on its own
+    row. Used by both the layout engine (to size the block) and the
+    renderer (to draw the same rows), so the two stay in lock-step.
+    """
+    in_names = {p.name for p in inst.data_inputs}
+    out_names = {p.name for p in inst.data_outputs}
+    in_extra: dict = {}
+    out_extra: dict = {}
+    for param_name in inst.parameters:
+        if param_name.startswith("__") or "." not in param_name:
+            continue
+        base_name = param_name.split(".", 1)[0]
+        if base_name in out_names:
+            out_extra.setdefault(base_name, []).append(param_name)
+        elif base_name in in_names:
+            in_extra.setdefault(base_name, []).append(param_name)
+    return in_extra, out_extra
+
+
+def _data_row_sequence(ports, extra_by_port: dict) -> list:
+    """Ordered rows for one side's data section: [("port", Port), ...] with
+    each port's struct-field rows - [("field", param_name), ...] - spliced
+    in immediately after it, instead of all fields trailing after every
+    real port (which would misplace a field several rows below its own
+    port whenever that port isn't the last one on its side)."""
+    sequence = []
+    for port in ports:
+        sequence.append(("port", port))
+        for field_name in extra_by_port.get(port.name, []):
+            sequence.append(("field", field_name))
+    return sequence
+
+
 def _xml_escape(text: str) -> str:
     """Escape text for safe embedding in SVG/XML."""
     return (text
@@ -888,11 +930,13 @@ class TypeResolver:
         data_out_names = []
 
         for conn in model.connections:
+            # "Instance.Port" addresses the port itself; "Instance.Port.Field"
+            # (a struct field) still means port "Port".
             src_parts = conn.source.split(".")
             dst_parts = conn.destination.split(".")
 
             # Source: FBName.PortName → output port
-            if len(src_parts) == 2 and src_parts[0] == inst.name:
+            if len(src_parts) >= 2 and src_parts[0] == inst.name:
                 port_name = src_parts[1]
                 if conn.conn_type == "event":
                     if port_name not in event_out_names:
@@ -902,7 +946,7 @@ class TypeResolver:
                         data_out_names.append(port_name)
 
             # Destination: FBName.PortName → input port
-            if len(dst_parts) == 2 and dst_parts[0] == inst.name:
+            if len(dst_parts) >= 2 and dst_parts[0] == inst.name:
                 port_name = dst_parts[1]
                 if conn.conn_type == "event":
                     if port_name not in event_in_names:
@@ -936,10 +980,13 @@ class TypeResolver:
         conn_ei, conn_eo, conn_di, conn_do = [], [], [], []
 
         for conn in model.connections:
+            # "Instance.Port" addresses the port itself; "Instance.Port.Field"
+            # (a struct field, e.g. F_MOVE.OUT.u16ObjId) still means port
+            # "Port" - the trailing field segments aren't a separate port.
             src_parts = conn.source.split(".")
             dst_parts = conn.destination.split(".")
 
-            if len(src_parts) == 2 and src_parts[0] == inst.name:
+            if len(src_parts) >= 2 and src_parts[0] == inst.name:
                 port_name = src_parts[1]
                 if conn.conn_type == "event":
                     if port_name not in conn_eo:
@@ -948,7 +995,7 @@ class TypeResolver:
                     if port_name not in conn_do:
                         conn_do.append(port_name)
 
-            if len(dst_parts) == 2 and dst_parts[0] == inst.name:
+            if len(dst_parts) >= 2 and dst_parts[0] == inst.name:
                 port_name = dst_parts[1]
                 if conn.conn_type == "event":
                     if port_name not in conn_ei:
@@ -973,13 +1020,22 @@ class TypeResolver:
         if any(n not in type_do for n in conn_do):
             inst.data_outputs = [Port(name=n) for n in conn_do]
 
-        # Add parameter ports not already present
+        # Add parameter ports not already present. A parameter can also
+        # address a struct field of an existing OUTPUT (e.g. "OUT.u16ObjId"
+        # for output "OUT") - that's not a new input, it stays on the
+        # output side (see _render_parameter_labels), so skip it here.
         existing_di = {p.name for p in inst.data_inputs}
         existing_ei = {p.name for p in inst.event_inputs}
+        existing_do = {p.name for p in inst.data_outputs}
+        existing_eo = {p.name for p in inst.event_outputs}
         for param_name in inst.parameters:
-            if not param_name.startswith("__") and param_name not in existing_di and param_name not in existing_ei:
-                inst.data_inputs.append(Port(name=param_name))
-                existing_di.add(param_name)
+            if param_name.startswith("__") or param_name in existing_di or param_name in existing_ei:
+                continue
+            base_name = param_name.split(".", 1)[0]
+            if base_name in existing_do or base_name in existing_eo:
+                continue
+            inst.data_inputs.append(Port(name=param_name))
+            existing_di.add(param_name)
 
 
 # ===========================================================================
@@ -1117,13 +1173,17 @@ class NetworkLayoutEngine:
         """Calculate block dimensions for an instance."""
         num_event_inputs = len(inst.event_inputs)
         num_event_outputs = len(inst.event_outputs)
-        num_data_inputs = len(inst.data_inputs)
-        num_data_outputs = len(inst.data_outputs)
         num_sockets = len(inst.sockets)
         num_plugs = len(inst.plugs)
 
+        # A struct-field parameter (e.g. "OUT.u16ObjId" for output "OUT")
+        # gets its own extra row immediately below the port it belongs to.
+        in_extra, out_extra = _dotted_field_params(inst)
+        in_seq = _data_row_sequence(inst.data_inputs, in_extra)
+        out_seq = _data_row_sequence(inst.data_outputs, out_extra)
+
         num_event_rows = max(num_event_inputs, num_event_outputs, 1)
-        num_data_rows = max(num_data_inputs, num_data_outputs)
+        num_data_rows = max(len(in_seq), len(out_seq))
         num_adapter_rows = max(num_sockets, num_plugs)
 
         # Visual block height matches the SWT GridLayout preferred size:
@@ -1162,6 +1222,11 @@ class NetworkLayoutEngine:
         for port in inst.sockets:
             pw = adapter_space + max(min_pin_w, self._measure_text(_truncate_label(port.name, self.settings.max_pin_label_size)))
             max_left = max(max_left, pw)
+        for kind, item in in_seq:
+            if kind != "field":
+                continue
+            pw = triangle_space + max(min_pin_w, self._measure_text(_truncate_label(item, self.settings.max_pin_label_size)))
+            max_left = max(max_left, pw)
 
         max_right = 0
         for port in inst.event_outputs + inst.data_outputs:
@@ -1169,6 +1234,11 @@ class NetworkLayoutEngine:
             max_right = max(max_right, pw)
         for port in inst.plugs:
             pw = adapter_space + max(min_pin_w, self._measure_text(_truncate_label(port.name, self.settings.max_pin_label_size)))
+            max_right = max(max_right, pw)
+        for kind, item in out_seq:
+            if kind != "field":
+                continue
+            pw = triangle_space + max(min_pin_w, self._measure_text(_truncate_label(item, self.settings.max_pin_label_size)))
             max_right = max(max_right, pw)
 
         min_center_gap = 8
@@ -1230,21 +1300,24 @@ class NetworkLayoutEngine:
             inst.port_positions[port.name] = (abs_x, abs_y)
             y += self.PORT_ROW_HEIGHT
 
-        # Data inputs (left side)
+        # Data inputs (left side), with each struct-field parameter row
+        # (e.g. "OUT.u16ObjId") spliced in right after the port it belongs
+        # to - these are genuine connection endpoints in their own right,
+        # not just decoration (see _dotted_field_params/_data_row_sequence).
         base_y = inst.name_section_bottom
+        in_extra, out_extra = _dotted_field_params(inst)
+
         y = base_y + 1 + self.PORT_ROW_HEIGHT / 2  # 1px top padding
-        for port in inst.data_inputs:
-            abs_x = inst.render_x
-            abs_y = inst.render_y + y
-            inst.port_positions[port.name] = (abs_x, abs_y)
+        for kind, item in _data_row_sequence(inst.data_inputs, in_extra):
+            name = item.name if kind == "port" else item
+            inst.port_positions[name] = (inst.render_x, inst.render_y + y)
             y += self.PORT_ROW_HEIGHT
 
         # Data outputs (right side)
         y = base_y + 1 + self.PORT_ROW_HEIGHT / 2  # 1px top padding
-        for port in inst.data_outputs:
-            abs_x = inst.render_x + inst.block_width
-            abs_y = inst.render_y + y
-            inst.port_positions[port.name] = (abs_x, abs_y)
+        for kind, item in _data_row_sequence(inst.data_outputs, out_extra):
+            name = item.name if kind == "port" else item
+            inst.port_positions[name] = (inst.render_x + inst.block_width, inst.render_y + y)
             y += self.PORT_ROW_HEIGHT
 
         # Adapter sockets (left side)
@@ -1363,7 +1436,10 @@ class NetworkLayoutEngine:
             if len(src_parts) == 1 and src_parts[0] in input_port_names and conn.dx1 != 0:
                 dx1_px = conn.dx1 * self.SCALE
                 dst_parts = conn.destination.split(".")
-                if len(dst_parts) == 2:
+                # >= 2: "Instance.Port" or a struct-field "Instance.Port.Field"
+                # both address instance dst_parts[0] - only the instance
+                # itself (not a specific port) matters for this calc.
+                if len(dst_parts) >= 2:
                     dst_inst = instance_map_tmp.get(dst_parts[0])
                     if dst_inst:
                         dist_to_dest = dst_inst.render_x - inst_min_x
@@ -1384,7 +1460,7 @@ class NetworkLayoutEngine:
             if len(src_parts) == 1 and src_parts[0] in input_port_names and conn.dx1 != 0:
                 dx1_px = conn.dx1 * self.SCALE
                 dst_parts = conn.destination.split(".")
-                if len(dst_parts) == 2:
+                if len(dst_parts) >= 2:
                     dst_inst = instance_map_tmp.get(dst_parts[0])
                     if dst_inst:
                         turn_x = input_sidebar_right + dx1_px
@@ -1417,10 +1493,15 @@ class NetworkLayoutEngine:
             dst_parts = conn.destination.split(".")
             if len(dst_parts) == 1 and dst_parts[0] in output_port_names and conn.dx1 != 0:
                 src_parts = conn.source.split(".")
-                if len(src_parts) == 2:
+                # >= 2: a struct-field source ("Instance.Port.Field") has its
+                # own dedicated port_positions entry under the full qualified
+                # name (see _dotted_field_params/_compute_port_positions);
+                # fall back to the base port if there's no such dedicated row.
+                if len(src_parts) >= 2:
                     src_inst = instance_map_tmp.get(src_parts[0])
                     if src_inst:
-                        port_name = src_parts[1]
+                        qualified_name = ".".join(src_parts[1:])
+                        port_name = qualified_name if qualified_name in src_inst.port_positions else src_parts[1]
                         if port_name in src_inst.port_positions:
                             src_x = src_inst.port_positions[port_name][0]
                             dx1_px = conn.dx1 * self.SCALE
@@ -1730,12 +1811,21 @@ class ConnectionRouter:
                           interface_map: Dict[str, InterfacePort],
                           is_source: bool) -> Optional[Tuple[float, float]]:
         """Resolve a connection endpoint to (x, y) coordinates."""
+        # "Instance.Port" addresses the port itself. "Instance.Port.Field"
+        # (a struct field, e.g. F_MOVE.OUT.u16ObjId) has its own dedicated
+        # row - and its own position - when a Parameter declared that field
+        # (see _dotted_field_params/_compute_port_positions); fall back to
+        # the port itself if not.
         parts = endpoint.split(".")
-        if len(parts) == 2:
-            fb_name, port_name = parts
+        if len(parts) >= 2:
+            fb_name = parts[0]
             inst = instance_map.get(fb_name)
-            if inst and port_name in inst.port_positions:
-                return inst.port_positions[port_name]
+            if inst:
+                qualified_name = ".".join(parts[1:])
+                if qualified_name in inst.port_positions:
+                    return inst.port_positions[qualified_name]
+                if parts[1] in inst.port_positions:
+                    return inst.port_positions[parts[1]]
             return None
         elif len(parts) == 1:
             # Interface port
@@ -2038,8 +2128,8 @@ class NetworkSVGRenderer:
                            instance_map: Dict[str, FBInstance]) -> str:
         """Resolve the data type of a connection endpoint (source or destination)."""
         parts = endpoint.split(".")
-        if len(parts) == 2:
-            fb_name, port_name = parts
+        if len(parts) >= 2:
+            fb_name, port_name = parts[0], parts[1]
             inst = instance_map.get(fb_name)
             if inst:
                 for p in inst.data_outputs + inst.data_inputs:
@@ -2282,7 +2372,9 @@ class NetworkSVGRenderer:
         # Data ports
         parts.append(self._render_data_ports(inst))
 
-        # Parameter value labels (literals on input ports)
+        # Parameter value labels (literals on input ports, plus struct-field
+        # rows below the data ports for a parameter that names a field of an
+        # output, e.g. "OUT.u16ObjId")
         parts.append(self._render_parameter_labels(inst))
 
         # Adapter ports
@@ -2494,66 +2586,110 @@ class NetworkSVGRenderer:
     def _render_data_ports(self, inst: FBInstance) -> str:
         parts = []
         base_y = inst.name_section_bottom
+        in_extra, out_extra = _dotted_field_params(inst)
 
-        # Data inputs (left side)
+        # Data inputs (left side). Struct-field rows are skipped here (drawn
+        # by _render_parameter_labels instead) but still advance y, so a
+        # port after one lands on the row _compute_port_positions gave it.
         y = base_y + 1 + self.PORT_ROW_HEIGHT / 2  # 1px top padding
-        for port in inst.data_inputs:
-            color = self._get_port_color(port.port_type)
-            parts.append(self._render_port_left(port, y, color))
+        for kind, item in _data_row_sequence(inst.data_inputs, in_extra):
+            if kind == "port":
+                color = self._get_port_color(item.port_type)
+                parts.append(self._render_port_left(item, y, color))
             y += self.PORT_ROW_HEIGHT
 
         # Data outputs (right side)
         y = base_y + 1 + self.PORT_ROW_HEIGHT / 2  # 1px top padding
-        for port in inst.data_outputs:
-            color = self._get_port_color(port.port_type)
-            parts.append(self._render_port_right(port, y, inst.block_width, color))
+        for kind, item in _data_row_sequence(inst.data_outputs, out_extra):
+            if kind == "port":
+                color = self._get_port_color(item.port_type)
+                parts.append(self._render_port_right(item, y, inst.block_width, color))
             y += self.PORT_ROW_HEIGHT
 
         return "\n".join(parts)
 
     def _render_parameter_labels(self, inst: FBInstance) -> str:
-        """Render literal/constant value labels on input ports that have parameters."""
+        """Render literal/constant value labels for parameters.
+
+        A parameter usually names a data input directly (e.g. "QI") - its
+        value is drawn as an external label to the left of that input's own
+        row. It can also address a struct field of a data OUTPUT (e.g.
+        "OUT.u16ObjId" for the u16ObjId member of output "OUT") - the port
+        itself keeps its own plain row (rendered by _render_data_ports), and
+        this field gets its own extra row immediately below it, on the same
+        side, matching what 4diac IDE itself shows. Walks the same
+        interleaved _data_row_sequence as _size_instance/_compute_port_positions,
+        so a field row lands on the exact row those reserved for it even
+        when its port isn't the last one on its side.
+        """
         if not inst.parameters:
             return ""
 
         parts = []
+        tw, th = self.TRIANGLE_WIDTH, self.TRIANGLE_HEIGHT
+        in_extra, out_extra = _dotted_field_params(inst)
 
-        # Build port name → local y lookup for all input ports
-        port_y_map: Dict[str, float] = {}
-        # Event inputs
+        def render_field_row(param_name: str, y: float, port_type: str, is_left: bool) -> None:
+            color = self._get_port_color(port_type)
+            text_y = y + self.FONT_SIZE * 0.35
+            label = _truncate_label(_xml_escape(param_name), self.settings.max_pin_label_size)
+            if is_left:
+                tri_points = f"0,{y - th/2} {tw},{y} 0,{y + th/2}"
+                parts.append(f'      <polygon points="{tri_points}" fill="{color}"/>')
+                parts.append(
+                    f'      <text x="{tw + 1}" y="{text_y:.1f}"'
+                    f' font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"'
+                    f' fill="#000000">{label}</text>')
+            else:
+                tri_x = inst.block_width - tw
+                tri_points = f"{tri_x},{y - th/2} {tri_x + tw},{y} {tri_x},{y + th/2}"
+                parts.append(f'      <polygon points="{tri_points}" fill="{color}"/>')
+                parts.append(
+                    f'      <text x="{inst.block_width - self.TRIANGLE_WIDTH - 1:.1f}" y="{text_y:.1f}"'
+                    f' font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"'
+                    f' fill="#000000" text-anchor="end">{label}</text>')
+
+        # Value labels for parameters that name an input port directly,
+        # plus struct-field rows on the input side, interleaved.
+        in_map: Dict[str, tuple] = {}
         y = 2 + self.PORT_ROW_HEIGHT / 2  # 2px top padding
         for port in inst.event_inputs:
-            port_y_map[port.name] = y
+            in_map[port.name] = (y, "Event")
             y += self.PORT_ROW_HEIGHT
-        # Data inputs
         y = inst.name_section_bottom + 1 + self.PORT_ROW_HEIGHT / 2  # 1px top padding
-        for port in inst.data_inputs:
-            port_y_map[port.name] = y
+        for kind, item in _data_row_sequence(inst.data_inputs, in_extra):
+            if kind == "port":
+                in_map[item.name] = (y, item.port_type)
+            else:
+                base_name = item.split(".", 1)[0]
+                port_type = next((p.port_type for p in inst.data_inputs if p.name == base_name), "")
+                render_field_row(item, y, port_type, is_left=True)
             y += self.PORT_ROW_HEIGHT
-
-        # Build port name → type lookup
-        port_type_map: Dict[str, str] = {}
-        for port in inst.event_inputs:
-            port_type_map[port.name] = "Event"
-        for port in inst.data_inputs:
-            port_type_map[port.name] = port.port_type
 
         for param_name, param_value in inst.parameters.items():
-            if param_name.startswith("__"):
-                continue  # skip internal keys
-            if param_name not in port_y_map:
-                continue  # parameter port not found
-            py = port_y_map[param_name]
-            port_type = port_type_map.get(param_name, "")
+            if param_name.startswith("__") or "." in param_name or not param_value:
+                continue
+            if param_name not in in_map:
+                continue
+            py, port_type = in_map[param_name]
             display_value = _format_parameter_value(param_value, port_type)
             display_value = _truncate_label(display_value, self.settings.max_value_label_size)
             display_value = _xml_escape(display_value)
-            text_x = -3
             text_y = py + self.FONT_SIZE * 0.35
             parts.append(
-                f'      <text x="{text_x}" y="{text_y:.1f}"'
+                f'      <text x="-3" y="{text_y:.1f}"'
                 f' font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"'
                 f' fill="#000000" text-anchor="end">{display_value}</text>')
+
+        # Output side: struct-field rows only (a real output port never
+        # carries a plain external value label).
+        y = inst.name_section_bottom + 1 + self.PORT_ROW_HEIGHT / 2
+        for kind, item in _data_row_sequence(inst.data_outputs, out_extra):
+            if kind == "field":
+                base_name = item.split(".", 1)[0]
+                port_type = next((p.port_type for p in inst.data_outputs if p.name == base_name), "")
+                render_field_row(item, y, port_type, is_left=False)
+            y += self.PORT_ROW_HEIGHT
 
         return "\n".join(parts)
 
