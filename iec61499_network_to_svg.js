@@ -34,6 +34,13 @@ class BlockSizeSettings {
         this.font = overrides.font ?? overrides.family ?? null;
         this.fontItalic = overrides.fontItalic ?? overrides.family_italic ?? null;
         this.fontSize = overrides.fontSize ?? overrides.size ?? null;
+        // If set (and font/fontItalic are NOT), the bundled TGL @font-face
+        // blocks get a url() fallback pointing at a font file hosted once,
+        // instead of embedding it per SVG. Fixes viewers without TGL
+        // installed as a system font silently falling through to a wider
+        // fallback font and overflowing the reserved space.
+        this.tglFontUrl = overrides.tglFontUrl ?? overrides.tgl_font_url ?? null;
+        this.tglFontUrlItalic = overrides.tglFontUrlItalic ?? overrides.tgl_font_url_italic ?? null;
     }
 }
 
@@ -69,7 +76,8 @@ function loadBlockSizeSettings(iniText) {
             if (key === "size") {
                 const n = parseInt(valStr, 10);
                 if (!isNaN(n)) settings.size = n;
-            } else if (key === "family" || key === "family_italic") {
+            } else if (key === "family" || key === "family_italic" ||
+                       key === "tgl_font_url" || key === "tgl_font_url_italic") {
                 settings[key] = valStr;
             }
         } else {
@@ -1434,6 +1442,43 @@ class ConnectionRouter {
 // ===========================================================================
 
 class NetworkSVGRenderer {
+    // FONT_FACE_STYLE with a url() fallback for viewers that don't have TGL
+    // installed as a system font (local() then resolves to nothing, and the
+    // browser silently falls through to the family stack's next font -
+    // usually a wider one, e.g. Times New Roman - which then overflows the
+    // space measured/reserved for the narrower TGL glyphs). The url() points
+    // at one font file hosted once (e.g. under a docs site's _static/), not
+    // embedded per SVG.
+    static _fontFaceStyleWithUrls(regularUrl, italicUrl) {
+        return `
+  <style>
+    @font-face {
+      font-family: "TGL 0-17_std";
+      src: local("TGL 0-17_std"), url("${regularUrl}") format("truetype");
+      font-style: normal;
+      font-weight: normal;
+    }
+    @font-face {
+      font-family: "TGL 0-17";
+      src: local("TGL 0-17"), local("TGL 0-17 alt"), url("${regularUrl}") format("truetype");
+      font-style: normal;
+      font-weight: normal;
+    }
+    @font-face {
+      font-family: "TGL 0-16_std";
+      src: local("TGL 0-16_std"), url("${italicUrl}") format("truetype");
+      font-style: normal;
+      font-weight: normal;
+    }
+    @font-face {
+      font-family: "TGL 0-16";
+      src: local("TGL 0-16"), url("${italicUrl}") format("truetype");
+      font-style: normal;
+      font-weight: normal;
+    }
+  </style>`;
+    }
+
     constructor(options = {}) {
         this.showShadow = options.showShadow !== false;
         this.showGrid = options.showGrid || false;
@@ -1490,6 +1535,9 @@ class NetworkSVGRenderer {
             // The @font-face block only maps the TGL faces; drop it once TGL is
             // no longer referenced, or it misdirects the renderer.
             this.FONT_FACE_STYLE = '';
+        } else if (!this.settings.font && !this.settings.fontItalic && this.settings.tglFontUrl) {
+            this.FONT_FACE_STYLE = NetworkSVGRenderer._fontFaceStyleWithUrls(
+                this.settings.tglFontUrl, this.settings.tglFontUrlItalic || this.settings.tglFontUrl);
         }
 
         this.BLOCK_STROKE_COLOR = "#A0A0A0";

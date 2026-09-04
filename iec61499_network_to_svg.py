@@ -185,6 +185,13 @@ class BlockSizeSettings:
     font: Optional[str] = None
     font_italic: Optional[str] = None
     font_size: Optional[int] = None
+    # If set (and font/font_italic are NOT), the bundled TGL @font-face
+    # blocks get a url() fallback pointing at a font file hosted once
+    # (e.g. a docs site's _static/fonts/), instead of embedding it per SVG.
+    # Fixes viewers without TGL installed as a system font silently falling
+    # through to a wider fallback font and overflowing the reserved space.
+    tgl_font_url: Optional[str] = None
+    tgl_font_url_italic: Optional[str] = None
 
     def __post_init__(self):
         if self.type_lib_paths is None:
@@ -235,6 +242,10 @@ def load_block_size_settings(path: str = None) -> BlockSizeSettings:
             settings.font_italic = section["family_italic"].strip()
         if section.get("size", "").strip():
             settings.font_size = int(section["size"].strip())
+        if section.get("tgl_font_url", "").strip():
+            settings.tgl_font_url = section["tgl_font_url"].strip()
+        if section.get("tgl_font_url_italic", "").strip():
+            settings.tgl_font_url_italic = section["tgl_font_url_italic"].strip()
     return settings
 
 
@@ -1813,6 +1824,44 @@ class NetworkSVGRenderer:
     }
   </style>'''
 
+    @staticmethod
+    def _font_face_style_with_urls(regular_url: str, italic_url: str) -> str:
+        """FONT_FACE_STYLE with a url() fallback for viewers that don't have
+        TGL installed as a system font (local() then resolves to nothing, and
+        the browser silently falls through to the family stack's next font -
+        usually a wider one, e.g. Times New Roman - which then overflows the
+        space measured/reserved for the narrower TGL glyphs). The url() points
+        at one font file hosted once (e.g. under a docs site's _static/), not
+        embedded per SVG.
+        """
+        return f'''
+  <style>
+    @font-face {{
+      font-family: "TGL 0-17_std";
+      src: local("TGL 0-17_std"), url("{regular_url}") format("truetype");
+      font-style: normal;
+      font-weight: normal;
+    }}
+    @font-face {{
+      font-family: "TGL 0-17";
+      src: local("TGL 0-17"), local("TGL 0-17 alt"), url("{regular_url}") format("truetype");
+      font-style: normal;
+      font-weight: normal;
+    }}
+    @font-face {{
+      font-family: "TGL 0-16_std";
+      src: local("TGL 0-16_std"), url("{italic_url}") format("truetype");
+      font-style: normal;
+      font-weight: normal;
+    }}
+    @font-face {{
+      font-family: "TGL 0-16";
+      src: local("TGL 0-16"), url("{italic_url}") format("truetype");
+      font-style: normal;
+      font-weight: normal;
+    }}
+  </style>'''
+
     # Colors (from 4diac IDE)
     BLOCK_STROKE_COLOR = "#A0A0A0"
     EVENT_PORT_COLOR = "#63B31F"
@@ -1860,6 +1909,11 @@ class NetworkSVGRenderer:
             # no longer referenced, or it misdirects the renderer.
             if "tgl" not in (self.FONT_FAMILY + self.FONT_FAMILY_ITALIC).lower():
                 self.FONT_FACE_STYLE = ""
+        elif self.settings.tgl_font_url:
+            self.FONT_FACE_STYLE = self._font_face_style_with_urls(
+                self.settings.tgl_font_url,
+                self.settings.tgl_font_url_italic or self.settings.tgl_font_url,
+            )
 
         # Load font for text measurement (same as layout engine)
         self._font = None
