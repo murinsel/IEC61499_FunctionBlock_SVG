@@ -156,6 +156,24 @@ def css_family_for_spec(spec: str, want_italic: bool = False) -> str:
     return spec
 
 
+def _xml_escape(text: str) -> str:
+    """Escape text for safe embedding in SVG/XML.
+
+    Source .fbt/.adp Comment attributes are free text and can contain
+    "<", ">", "&", or '"' (e.g. "True if CV <= 0"); embedding them
+    unescaped produces invalid XML that chokes strict SVG consumers
+    (observed: Typst's SVG parser erroring "invalid name token", and
+    the malformed content cascading into "maximum parsing depth
+    exceeded" once such an SVG's raw text leaks into a downstream
+    pandoc/typst PDF pipeline).
+    """
+    return (text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;"))
+
+
 @dataclass
 class Port:
     """Represents an event or data port."""
@@ -739,7 +757,7 @@ class SVGRenderer:
     def _calculate_label_width(self, port: Port, is_event: bool, is_left: bool,
                                is_adapter: bool = False) -> float:
         """Calculate the width of an external label for a port."""
-        dash_width = self._measure_text(" – ")
+        dash_width = self._measure_text(" \N{EN DASH} ")
 
         label_width = 0
         if self.show_comments and port.comment:
@@ -896,7 +914,7 @@ class SVGRenderer:
         return f'''
     <polygon points="{tri_points}" fill="{self.EVENT_PORT_COLOR}"/>
     <text x="{text_x}" y="{text_y}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
-          fill="#000000" dominant-baseline="middle">{port.name}</text>'''
+          fill="#000000" dominant-baseline="middle">{_xml_escape(port.name)}</text>'''
 
     def _render_event_output_port(self, port: Port, y: float) -> str:
         """Render an event output port (right side) - triangle and label only."""
@@ -917,7 +935,7 @@ class SVGRenderer:
         return f'''
     <polygon points="{tri_points}" fill="{self.EVENT_PORT_COLOR}"/>
     <text x="{text_x}" y="{text_y}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
-          fill="#000000" text-anchor="end" dominant-baseline="middle">{port.name}</text>'''
+          fill="#000000" text-anchor="end" dominant-baseline="middle">{_xml_escape(port.name)}</text>'''
 
     @staticmethod
     def _mini_fb_path(x: float, y: float, w: float, h: float) -> str:
@@ -968,7 +986,7 @@ class SVGRenderer:
             version_text = f'''
     <text x="{self.block_width / 2}" y="{center_y + 20}"
           font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE - 2}"
-          fill="#666666" text-anchor="middle">{fb.version}</text>'''
+          fill="#666666" text-anchor="middle">{_xml_escape(fb.version)}</text>'''
 
         # Icon dimensions
         icon_w = 18
@@ -1060,7 +1078,7 @@ class SVGRenderer:
     <!-- Block Name -->
     <text x="{text_x}" y="{center_y + 5}"
           font-family="{self.FONT_FAMILY_ITALIC}" font-size="{self.FONT_SIZE}"
-          fill="#000000" font-style="italic">{fb.name}</text>
+          fill="#000000" font-style="italic">{_xml_escape(fb.name)}</text>
     {version_text}'''
 
     def _render_data_ports(self, fb: FunctionBlock) -> str:
@@ -1105,7 +1123,7 @@ class SVGRenderer:
         return f'''
     <polygon points="{tri_points}" fill="{fill_color}"/>
     <text x="{text_x}" y="{text_y}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
-          fill="#000000" dominant-baseline="middle">{port.name}</text>'''
+          fill="#000000" dominant-baseline="middle">{_xml_escape(port.name)}</text>'''
 
     def _render_data_output_port(self, port: Port, y: float) -> str:
         """Render a data output port (right side) - triangle and label only."""
@@ -1127,7 +1145,7 @@ class SVGRenderer:
         return f'''
     <polygon points="{tri_points}" fill="{fill_color}"/>
     <text x="{text_x}" y="{text_y}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
-          fill="#000000" text-anchor="end" dominant-baseline="middle">{port.name}</text>'''
+          fill="#000000" text-anchor="end" dominant-baseline="middle">{_xml_escape(port.name)}</text>'''
 
     def _render_adapter_ports(self, fb: FunctionBlock) -> str:
         """Render adapter ports (sockets and plugs) at the bottom of the block."""
@@ -1197,7 +1215,7 @@ class SVGRenderer:
         return f'''
     <path d="{path_d}" fill="none" stroke="{adapter_color}" stroke-width="1"/>
     <text x="{text_x}" y="{text_y}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
-          fill="#000000" dominant-baseline="middle">{port.name}</text>'''
+          fill="#000000" dominant-baseline="middle">{_xml_escape(port.name)}</text>'''
 
     def _render_plug_port(self, port: Port, y: float) -> str:
         """Render a plug (output adapter) port - horizontally mirrored notched rectangle."""
@@ -1239,7 +1257,7 @@ class SVGRenderer:
         return f'''
     <path d="{path_d}" fill="{adapter_color}"/>
     <text x="{text_x}" y="{text_y}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
-          fill="#000000" text-anchor="end" dominant-baseline="middle">{port.name}</text>'''
+          fill="#000000" text-anchor="end" dominant-baseline="middle">{_xml_escape(port.name)}</text>'''
 
     def _render_external_labels(self, fb: FunctionBlock) -> str:
         """Render labels outside the block (comments and types).
@@ -1263,10 +1281,10 @@ class SVGRenderer:
             if self.show_types or (self.show_comments and port.comment):
                 label_parts = []
                 if self.show_comments and port.comment:
-                    label_parts.append(port.comment)
+                    label_parts.append(_xml_escape(port.comment))
                 if self.show_types:
                     if label_parts:
-                        label_parts.append(" – ")
+                        label_parts.append(" \N{EN DASH} ")
                     # Type in italic using tspan
                     label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">Event</tspan>')
                 label_text = "".join(label_parts)
@@ -1284,8 +1302,8 @@ class SVGRenderer:
                     label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">Event</tspan>')
                 if self.show_comments and port.comment:
                     if label_parts:
-                        label_parts.append(" – ")
-                    label_parts.append(port.comment)
+                        label_parts.append(" \N{EN DASH} ")
+                    label_parts.append(_xml_escape(port.comment))
                 label_text = "".join(label_parts)
                 parts.append(f'''
     <text x="{right_label_x}" y="{y}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
@@ -1298,11 +1316,11 @@ class SVGRenderer:
             if self.show_types or (self.show_comments and port.comment):
                 label_parts = []
                 if self.show_comments and port.comment:
-                    label_parts.append(port.comment)
+                    label_parts.append(_xml_escape(port.comment))
                 if self.show_types:
                     if label_parts:
-                        label_parts.append(" – ")
-                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">{port.port_type}</tspan>')
+                        label_parts.append(" \N{EN DASH} ")
+                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">{_xml_escape(port.port_type)}</tspan>')
                 label_text = "".join(label_parts)
                 parts.append(f'''
     <text x="{left_label_x}" y="{y}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
@@ -1315,11 +1333,11 @@ class SVGRenderer:
             if self.show_types or (self.show_comments and port.comment):
                 label_parts = []
                 if self.show_types:
-                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">{port.port_type}</tspan>')
+                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">{_xml_escape(port.port_type)}</tspan>')
                 if self.show_comments and port.comment:
                     if label_parts:
-                        label_parts.append(" – ")
-                    label_parts.append(port.comment)
+                        label_parts.append(" \N{EN DASH} ")
+                    label_parts.append(_xml_escape(port.comment))
                 label_text = "".join(label_parts)
                 parts.append(f'''
     <text x="{right_label_x}" y="{y}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
@@ -1332,13 +1350,13 @@ class SVGRenderer:
             if self.show_types or (self.show_comments and port.comment):
                 label_parts = []
                 if self.show_comments and port.comment:
-                    label_parts.append(port.comment)
+                    label_parts.append(_xml_escape(port.comment))
                 if self.show_types:
                     if label_parts:
-                        label_parts.append(" – ")
+                        label_parts.append(" \N{EN DASH} ")
                     # Use short adapter type name (last part after ::)
                     short_type = port.port_type.split("::")[-1] if "::" in port.port_type else port.port_type
-                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">{short_type}</tspan>')
+                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">{_xml_escape(short_type)}</tspan>')
                 label_text = "".join(label_parts)
                 parts.append(f'''
     <text x="{left_label_x}" y="{y}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
@@ -1352,11 +1370,11 @@ class SVGRenderer:
                 label_parts = []
                 if self.show_types:
                     short_type = port.port_type.split("::")[-1] if "::" in port.port_type else port.port_type
-                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">{short_type}</tspan>')
+                    label_parts.append(f'<tspan font-family="{self.FONT_FAMILY_ITALIC}" font-style="italic" dominant-baseline="middle">{_xml_escape(short_type)}</tspan>')
                 if self.show_comments and port.comment:
                     if label_parts:
-                        label_parts.append(" – ")
-                    label_parts.append(port.comment)
+                        label_parts.append(" \N{EN DASH} ")
+                    label_parts.append(_xml_escape(port.comment))
                 label_text = "".join(label_parts)
                 parts.append(f'''
     <text x="{right_label_x}" y="{y}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"

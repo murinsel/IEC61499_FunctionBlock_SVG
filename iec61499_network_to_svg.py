@@ -2589,7 +2589,7 @@ class NetworkSVGRenderer:
         text_x = tri_x + tw + 1
         text_y = y + self.FONT_SIZE * 0.35
 
-        display_name = _truncate_label(port.name, self.settings.max_pin_label_size)
+        display_name = _xml_escape(_truncate_label(port.name, self.settings.max_pin_label_size))
         return f'''      <polygon points="{tri_points}" fill="{color}"/>
       <text x="{text_x}" y="{text_y}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
             fill="#000000">{display_name}</text>'''
@@ -2605,7 +2605,7 @@ class NetworkSVGRenderer:
         text_x = tri_x - 1
         text_y = y + self.FONT_SIZE * 0.35
 
-        display_name = _truncate_label(port.name, self.settings.max_pin_label_size)
+        display_name = _xml_escape(_truncate_label(port.name, self.settings.max_pin_label_size))
         return f'''      <polygon points="{tri_points}" fill="{color}"/>
       <text x="{text_x}" y="{text_y}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
             fill="#000000" text-anchor="end">{display_name}</text>'''
@@ -2639,7 +2639,7 @@ class NetworkSVGRenderer:
         text_x = rect_x + rect_w + 3
         text_y = y + self.FONT_SIZE * 0.35
 
-        display_name = _truncate_label(port.name, self.settings.max_pin_label_size)
+        display_name = _xml_escape(_truncate_label(port.name, self.settings.max_pin_label_size))
         return f'''      <path d="{path_d}" fill="none" stroke="{self.ADAPTER_PORT_COLOR}" stroke-width="1"/>
       <text x="{text_x}" y="{text_y}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
             fill="#000000">{display_name}</text>'''
@@ -2673,7 +2673,7 @@ class NetworkSVGRenderer:
         text_x = rect_x - 3
         text_y = y + self.FONT_SIZE * 0.35
 
-        display_name = _truncate_label(port.name, self.settings.max_pin_label_size)
+        display_name = _xml_escape(_truncate_label(port.name, self.settings.max_pin_label_size))
         return f'''      <path d="{path_d}" fill="{self.ADAPTER_PORT_COLOR}"/>
       <text x="{text_x}" y="{text_y}" font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"
             fill="#000000" text-anchor="end">{display_name}</text>'''
@@ -2778,7 +2778,7 @@ class NetworkSVGRenderer:
 
         tw = self.TRIANGLE_WIDTH
         th = self.TRIANGLE_HEIGHT
-        display_name = _truncate_label(ip.name, self.settings.max_interface_bar_size)
+        display_name = _xml_escape(_truncate_label(ip.name, self.settings.max_interface_bar_size))
         text_y = y + self.FONT_SIZE * 0.35  # vertically center text with symbol
 
         # Adapter ports use socket/plug symbols
