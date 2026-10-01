@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Converts IEC 61499 function block XML definitions (`.fbt`, `.adp`, `.sub`) into SVG graphics styled like Eclipse 4diac IDE. Dual Python/JavaScript implementations with mirror functionality.
+Converts IEC 61499 function block XML definitions (`.fbt`, `.adp`, `.sub`, `.fct`) into SVG graphics styled like Eclipse 4diac IDE. Dual Python/JavaScript implementations with mirror functionality.
 
 Two converter pipelines:
 - **Single FB converter** (`iec61499_to_svg.py/.js`) — renders individual FB signatures with ports, labels, association lines

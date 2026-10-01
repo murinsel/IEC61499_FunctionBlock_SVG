@@ -52,6 +52,8 @@ class IEC61499Parser {
             return this._parseAdapter(root);
         } else if (root.tagName === "SubAppType") {
             return this._parseSubapp(root);
+        } else if (root.tagName === "Function") {
+            return this._parseFunction(root);
         } else {
             throw new Error(`Unknown root element: ${root.tagName}`);
         }
@@ -91,6 +93,27 @@ class IEC61499Parser {
             root.getAttribute("Name") || "Unknown",
             root.getAttribute("Comment") || "",
             "Adapter"
+        );
+
+        const versionInfo = root.querySelector("VersionInfo");
+        if (versionInfo) {
+            fb.version = versionInfo.getAttribute("Version") || "";
+        }
+
+        const interfaceList = root.querySelector("InterfaceList");
+        if (interfaceList) {
+            this._parseInterface(interfaceList, fb);
+        }
+
+        return fb;
+    }
+
+    // 4diac Function (.fct); its unnamed output is the return value
+    _parseFunction(root) {
+        const fb = new FunctionBlock(
+            root.getAttribute("Name") || "Unknown",
+            root.getAttribute("Comment") || "",
+            "Function"
         );
 
         const versionInfo = root.querySelector("VersionInfo");
@@ -760,6 +783,8 @@ class SVGRenderer {
             iconLetter = "C";
         } else if (fb.fbType === "ServiceInterfaceFB") {
             iconLetter = "Si";
+        } else if (fb.fbType === "Function") {
+            iconLetter = "F";
         } else {
             iconLetter = "S";
         }

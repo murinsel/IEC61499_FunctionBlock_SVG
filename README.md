@@ -4,14 +4,14 @@
 [![Python](https://img.shields.io/badge/python-3-blue)](#requirements)
 [![Node.js](https://img.shields.io/badge/node.js-jsdom-green)](#requirements)
 
-Converts IEC 61499 function block XML definitions (`.fbt`, `.adp`, and `.sub` files) into SVG graphics styled like the [Eclipse 4diac IDE](https://eclipse.dev/4diac/).
+Converts IEC 61499 function block XML definitions (`.fbt`, `.adp`, `.sub`, and `.fct` files) into SVG graphics styled like the [Eclipse 4diac IDE](https://eclipse.dev/4diac/).
 
 Available as both a **Python** script and a **JavaScript** module (browser + Node.js).
 
 ## Features
 
 ### Single FB Converter
-- Parses `FBType`, `AdapterType`, and `SubAppType` XML elements
+- Parses `FBType`, `AdapterType`, `SubAppType`, and `Function` XML elements
 - Renders event and data ports with type-specific colors matching 4diac IDE
 - Draws event-data association lines with connector squares
 - Shows external labels with comments and type information
@@ -74,7 +74,7 @@ python3 iec61499_to_svg.py input.fbt --font "Menlo" --font-size 12
 
 Open `test_iec61499_to_svg.html` in a browser. You can:
 - Paste XML directly into the textarea
-- Use the **Open File...** button to select `.fbt`/`.adp`/`.sub` files
+- Use the **Open File...** button to select `.fbt`/`.adp`/`.sub`/`.fct` files
 - Download the generated SVG
 
 ```javascript

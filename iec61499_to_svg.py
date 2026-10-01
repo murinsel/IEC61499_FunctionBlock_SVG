@@ -195,6 +195,8 @@ class IEC61499Parser:
             return self._parse_adapter(root)
         elif root.tag == "SubAppType":
             return self._parse_subapp(root)
+        elif root.tag == "Function":
+            return self._parse_function(root)
         else:
             raise ValueError(f"Unknown root element: {root.tag}")
 
@@ -228,6 +230,24 @@ class IEC61499Parser:
             name=root.get("Name", "Unknown"),
             comment=root.get("Comment", ""),
             fb_type="Adapter"
+        )
+
+        version_info = root.find("VersionInfo")
+        if version_info is not None:
+            fb.version = version_info.get("Version", "")
+
+        interface = root.find("InterfaceList")
+        if interface is not None:
+            self._parse_interface(interface, fb)
+
+        return fb
+
+    def _parse_function(self, root: ET.Element) -> FunctionBlock:
+        """Parse a 4diac Function (.fct). Its unnamed output is the return value."""
+        fb = FunctionBlock(
+            name=root.get("Name", "Unknown"),
+            comment=root.get("Comment", ""),
+            fb_type="Function"
         )
 
         version_info = root.find("VersionInfo")
@@ -960,6 +980,8 @@ class SVGRenderer:
             icon_letter = "C"
         elif fb.fb_type == "ServiceInterfaceFB":
             icon_letter = "Si"
+        elif fb.fb_type == "Function":
+            icon_letter = "F"
         else:
             icon_letter = "S"
 
@@ -1561,6 +1583,9 @@ def convert_batch(input_dir: str, output_dir: str, recursive: bool = True,
 
     sub_pattern = "**/*.sub" if recursive else "*.sub"
     fbt_files.extend(input_path.glob(sub_pattern))
+
+    fct_pattern = "**/*.fct" if recursive else "*.fct"
+    fbt_files.extend(input_path.glob(fct_pattern))
 
     count = 0
     for fbt_file in fbt_files:
