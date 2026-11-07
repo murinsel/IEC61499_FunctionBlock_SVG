@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FBType Name="MultilineComment" Comment="Erste Zeile des Kommentars&#10; zweite Zeile, die deutlich laenger ist als die erste und trotzdem komplett im Diagramm sichtbar sein muss, auch wenn sie breiter als das Netzwerk ist, denn dieser Text ist absichtlich laenger als die Mindestbreite des Netzwerks von 1112 Pixeln und erzwingt daher die Verbreiterung des Diagramms&#10; dritte Zeile">
+	<InterfaceList>
+	</InterfaceList>
+	<FBNetwork>
+		<FB Name="Q" Type="DigitalInput" x="0" y="0">
+		</FB>
+		<FB Name="R" Type="DigitalOutput" x="600" y="0">
+		</FB>
+		<EventConnections>
+			<Connection Source="Q.IND" Destination="R.REQ"/>
+		</EventConnections>
+	</FBNetwork>
+</FBType>

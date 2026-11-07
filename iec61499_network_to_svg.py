@@ -55,6 +55,9 @@ _FONT_EXTENSIONS = (".ttf", ".ttc", ".otf", ".otc")
 # Fonts are measured at this multiple of the nominal size and scaled back down,
 # to recover the fractional glyph advances Pillow's basic layout rounds away.
 MEASURE_SUPERSAMPLE = 16
+# No bold face is loaded for measuring; bold glyphs are about 10 % wider than regular ones,
+# so bold text is measured conservatively as the regular width times this factor.
+BOLD_WIDTH_FACTOR = 1.1
 
 # (family_lower, want_italic) -> (path, index) or None
 _font_lookup_cache: Dict[tuple, Optional[tuple]] = {}
@@ -236,6 +239,22 @@ def load_block_size_settings(path: str = None) -> BlockSizeSettings:
         if section.get("size", "").strip():
             settings.font_size = int(section["size"].strip())
     return settings
+
+
+# Line height of the header comment relative to the font size (15 px at the default size 12)
+COMMENT_LINE_HEIGHT_FACTOR = 1.25
+
+
+def _comment_lines(comment: str) -> List[str]:
+    """Split a Comment attribute into display lines for the diagram header.
+
+    A comment may contain line breaks (``&#10;`` in the XML, as written by the
+    4diac IDE); leading whitespace of a continuation line is dropped.
+    """
+    lines = [line.strip() for line in comment.splitlines()]
+    while lines and not lines[-1]:
+        lines.pop()
+    return lines
 
 
 def _truncate_label(text: str, max_len: int) -> str:
@@ -1086,13 +1105,14 @@ class NetworkLayoutEngine:
         if self._font_italic is None and self._font is not None:
             self._font_italic = self._font
 
-    def _measure_text(self, text: str, italic: bool = False) -> float:
+    def _measure_text(self, text: str, italic: bool = False, bold: bool = False) -> float:
         if PILLOW_AVAILABLE and self._font:
             font = self._font_italic if italic and self._font_italic else self._font
             # Advance width, not ink extent; fonts are opened supersampled.
-            return font.getlength(text) / MEASURE_SUPERSAMPLE
+            width = font.getlength(text) / MEASURE_SUPERSAMPLE
         else:
-            return len(text) * self.FONT_SIZE * 0.6
+            width = len(text) * self.FONT_SIZE * 0.6
+        return width * BOLD_WIDTH_FACTOR if bold else width
 
     def layout(self, model: NetworkModel):
         """Compute all positions and sizes."""
@@ -1473,6 +1493,10 @@ class NetworkLayoutEngine:
         Sidebars are adjusted to span from header separator to border bottom.
         """
         HEADER_HEIGHT = 25   # Height of the header bar (margin + text + margin)
+        # One extra text line per line break in the comment
+        comment_lines = _comment_lines(model.comment)
+        if len(comment_lines) > 1:
+            HEADER_HEIGHT += (len(comment_lines) - 1) * self.FONT_SIZE * COMMENT_LINE_HEIGHT_FACTOR
 
         # Determine the full horizontal and vertical extent (sidebars + instances)
         all_x = []
@@ -1517,7 +1541,13 @@ class NetworkLayoutEngine:
         network_left = content_left + input_sw
         network_right = content_right - output_sw
         network_w = network_right - network_left
-        network_h = content_bottom - content_top + 2 * border_pad_v + 25  # include header + padding
+        network_h = content_bottom - content_top + 2 * border_pad_v + HEADER_HEIGHT  # include header + padding
+
+        # The comment lines (drawn bold) must fit into the header; widen the network
+        # area instead of letting the text be clipped by the viewBox.
+        if comment_lines:
+            comment_w = max(self._measure_text(line, bold=True) for line in comment_lines) + 10
+            MIN_NETWORK_WIDTH = max(MIN_NETWORK_WIDTH, comment_w - input_sw - output_sw)
 
         if network_w < MIN_NETWORK_WIDTH:
             extra = MIN_NETWORK_WIDTH - network_w
@@ -2122,16 +2152,20 @@ class NetworkSVGRenderer:
             # Comment text
             if model.comment:
                 text_x = hx + 5
-                text_y = hy + hh / 2 + self.FONT_SIZE * 0.35
-                # Escape XML entities in comment
-                comment_text = (model.comment
-                    .replace("&", "&amp;")
-                    .replace("<", "&lt;")
-                    .replace(">", "&gt;")
-                    .replace('"', "&quot;"))
-                parts.append(f'  <text x="{text_x:.1f}" y="{text_y:.1f}"'
-                            f' font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"'
-                            f' font-weight="bold" fill="#333333">{comment_text}</text>')
+                lines = _comment_lines(model.comment)
+                line_h = self.FONT_SIZE * COMMENT_LINE_HEIGHT_FACTOR
+                # Vertically centered block of lines; a single line sits at the center as before
+                first_y = hy + hh / 2 - (len(lines) - 1) * line_h / 2 + self.FONT_SIZE * 0.35
+                for n, line in enumerate(lines):
+                    # Escape XML entities in comment
+                    comment_text = (line
+                        .replace("&", "&amp;")
+                        .replace("<", "&lt;")
+                        .replace(">", "&gt;")
+                        .replace('"', "&quot;"))
+                    parts.append(f'  <text x="{text_x:.1f}" y="{first_y + n * line_h:.1f}"'
+                                f' font-family="{self.FONT_FAMILY}" font-size="{self.FONT_SIZE}"'
+                                f' font-weight="bold" fill="#333333">{comment_text}</text>')
 
         # Render sidebar backgrounds (behind everything else)
         parts.append('  <g id="sidebars">')
