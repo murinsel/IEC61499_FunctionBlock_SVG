@@ -1377,8 +1377,18 @@ if (typeof module !== 'undefined' && module.exports) {
                 options.fontItalic = args[++i];
             } else if (args[i] === '--font-size' && args[i + 1]) {
                 options.fontSize = parseInt(args[++i], 10);
-            } else if (args[i] === '--adapter-view' && args[i + 1]) {
-                options.adapterView = args[++i];
+            } else if (args[i] === '--adapter-view') {
+                // Validate like Python's argparse choices: a typo must not silently
+                // fall back to the plug view and render the wrong port directions.
+                const view = args[i + 1];
+                if (view !== 'plug' && view !== 'socket') {
+                    console.error(view === undefined
+                        ? 'Error: --adapter-view requires a value (plug or socket)'
+                        : `Error: invalid --adapter-view '${view}' (choose plug or socket)`);
+                    process.exit(2);
+                }
+                options.adapterView = view;
+                i++;
             }
         }
 
