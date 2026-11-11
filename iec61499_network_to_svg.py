@@ -669,21 +669,26 @@ class TypeResolver:
             lib = Path(lib_path)
             if not lib.exists():
                 continue
-            for ext in ['*.fbt', '*.sub', '*.adp']:
-                for f in lib.rglob(ext):
-                    # Index by filename (without extension)
-                    name = f.stem
-                    self._file_index[name] = str(f)
-                    # Also index by relative path with :: separators
-                    try:
-                        rel = f.relative_to(lib)
-                        # Convert path to :: namespace: iec61499/events/E_SWITCH.fbt → iec61499::events::E_SWITCH
-                        parts = list(rel.parts)
-                        parts[-1] = f.stem  # Remove extension
-                        qualified = "::".join(parts)
-                        self._file_index[qualified] = str(f)
-                    except ValueError:
-                        pass
+            valid_exts = {'.fbt', '.sub', '.adp'}
+            for f in lib.rglob('*'):
+                # Case-insensitive extension match: 4diac IDE itself writes some
+                # type files (.SUB, .FBT) with uppercase extensions, which a plain
+                # '*.sub'/'*.fbt' glob silently misses on case-sensitive filesystems.
+                if not f.is_file() or f.suffix.lower() not in valid_exts:
+                    continue
+                # Index by filename (without extension)
+                name = f.stem
+                self._file_index[name] = str(f)
+                # Also index by relative path with :: separators
+                try:
+                    rel = f.relative_to(lib)
+                    # Convert path to :: namespace: iec61499/events/E_SWITCH.fbt → iec61499::events::E_SWITCH
+                    parts = list(rel.parts)
+                    parts[-1] = f.stem  # Remove extension
+                    qualified = "::".join(parts)
+                    self._file_index[qualified] = str(f)
+                except ValueError:
+                    pass
         self._index_built = True
 
     def resolve(self, model: NetworkModel):
