@@ -1523,17 +1523,32 @@ class SVGRenderer:
         return "\n".join(parts)
 
 
+def mirror_adapter(fb: FunctionBlock) -> FunctionBlock:
+    """Return the socket view of an adapter type.
+
+    An adapter type is declared as seen from the plug (IEC 61499-1, 5.5.3 c).
+    A socket uses the same events and data with inputs and outputs swapped
+    (5.5.3 d). The With associations are unchanged.
+    """
+    fb.event_inputs, fb.event_outputs = fb.event_outputs, fb.event_inputs
+    fb.data_inputs, fb.data_outputs = fb.data_outputs, fb.data_inputs
+    return fb
+
+
 def convert_fbt_to_svg(input_path: str, output_path: Optional[str] = None,
                        show_comments: bool = True, show_types: bool = True,
                        show_shadow: bool = True, font: Optional[str] = None,
                        font_italic: Optional[str] = None,
-                       font_size: Optional[int] = None) -> str:
+                       font_size: Optional[int] = None,
+                       adapter_view: str = "plug") -> str:
     parser = IEC61499Parser()
     renderer = SVGRenderer(show_comments=show_comments, show_types=show_types,
                            show_shadow=show_shadow, font=font,
                            font_italic=font_italic, font_size=font_size)
 
     fb = parser.parse(input_path)
+    if adapter_view == "socket" and fb.fb_type == "Adapter":
+        fb = mirror_adapter(fb)
     svg = renderer.render(fb)
 
     if output_path:
@@ -1548,7 +1563,8 @@ def convert_batch(input_dir: str, output_dir: str, recursive: bool = True,
                   show_comments: bool = True, show_types: bool = True,
                   show_shadow: bool = True, font: Optional[str] = None,
                   font_italic: Optional[str] = None,
-                  font_size: Optional[int] = None) -> int:
+                  font_size: Optional[int] = None,
+                  adapter_view: str = "plug") -> int:
     input_path = Path(input_dir)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -1572,7 +1588,8 @@ def convert_batch(input_dir: str, output_dir: str, recursive: bool = True,
             convert_fbt_to_svg(str(fbt_file), str(svg_file),
                              show_comments=show_comments, show_types=show_types,
                              show_shadow=show_shadow, font=font,
-                             font_italic=font_italic, font_size=font_size)
+                             font_italic=font_italic, font_size=font_size,
+                             adapter_view=adapter_view)
             count += 1
         except Exception as e:
             print(f"Error converting {fbt_file}: {e}", file=sys.stderr)
@@ -1605,6 +1622,10 @@ def main():
                              "that is given.")
     parser.add_argument("--font-size", type=int, metavar="PX",
                         help="Font size in pixels (default: 14)")
+    parser.add_argument("--adapter-view", choices=["plug", "socket"], default="plug",
+                        help="Adapter types only: plug draws the declaration, socket "
+                             "the mirrored interface with inputs and outputs swapped "
+                             "(default: plug)")
 
     args = parser.parse_args()
     input_path = Path(args.input)
@@ -1618,7 +1639,7 @@ def main():
     show_shadow = not args.no_shadow
 
     font_opts = dict(font=args.font, font_italic=args.font_italic,
-                     font_size=args.font_size)
+                     font_size=args.font_size, adapter_view=args.adapter_view)
 
     if args.batch or input_path.is_dir():
         output_dir = args.output or str(input_path) + "_svg"

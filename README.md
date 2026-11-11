@@ -196,6 +196,7 @@ used for type names and the `Event` label; regular for everything else.
 | `--font SPEC` | Font for regular text |
 | `--font-italic SPEC` | Font for italic text. Defaults to `--font` when only that is given |
 | `--font-size PX` | Font size. Default 14 (single FB) / 12 (network) |
+| `--adapter-view plug\|socket` | Adapter types only (single FB). `plug` draws the declaration, `socket` the mirrored interface (IEC 61499-1, 5.5.3). Default `plug` |
 
 A `SPEC` is either a **CSS font-family stack**, passed through to the SVG
 untouched so you can supply your own fallbacks:

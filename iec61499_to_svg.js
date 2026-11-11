@@ -1302,24 +1302,39 @@ class SVGRenderer {
 }
 
 /**
+ * Socket view of an adapter type. An adapter type is declared as seen from the
+ * plug (IEC 61499-1, 5.5.3 c); a socket uses the same events and data with
+ * inputs and outputs swapped (5.5.3 d). The With associations are unchanged.
+ */
+function mirrorAdapter(fb) {
+    [fb.eventInputs, fb.eventOutputs] = [fb.eventOutputs, fb.eventInputs];
+    [fb.dataInputs, fb.dataOutputs] = [fb.dataOutputs, fb.dataInputs];
+    return fb;
+}
+
+/**
  * Convert FBT XML string to SVG
  * @param {string} xmlString - The FBT XML content
  * @param {Object} options - Rendering options
  * @param {boolean} options.showComments - Show port comments (default: true)
  * @param {boolean} options.showTypes - Show port types (default: true)
  * @param {boolean} options.showShadow - Show drop shadow (default: true)
+ * @param {string} options.adapterView - Adapter types only: "plug" (declaration, default) or "socket" (mirrored)
  * @returns {string} SVG content
  */
 function convertFbtToSvg(xmlString, options = {}) {
     const parser = new IEC61499Parser();
     const renderer = new SVGRenderer(options);
-    const fb = parser.parse(xmlString);
+    let fb = parser.parse(xmlString);
+    if (options.adapterView === "socket" && fb.fbType === "Adapter") {
+        fb = mirrorAdapter(fb);
+    }
     return renderer.render(fb);
 }
 
 // Node.js CLI support
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { convertFbtToSvg, IEC61499Parser, SVGRenderer, FunctionBlock, Port, VERSION };
+    module.exports = { convertFbtToSvg, mirrorAdapter, IEC61499Parser, SVGRenderer, FunctionBlock, Port, VERSION };
 
     // CLI execution
     if (require.main === module) {
@@ -1334,6 +1349,7 @@ if (typeof module !== 'undefined' && module.exports) {
         if (args.length === 0) {
             console.log('Usage: node iec61499_to_svg.js input.fbt [-o output.svg] [--no-comments] [--no-types] [--no-shadow]');
             console.log('                                  [--font FAMILY] [--font-italic FAMILY] [--font-size PX]');
+            console.log('                                  [--adapter-view plug|socket]');
             console.log('  --font/--font-italic take a CSS font-family stack, e.g. "Menlo, Consolas, monospace"');
             process.exit(1);
         }
@@ -1361,6 +1377,18 @@ if (typeof module !== 'undefined' && module.exports) {
                 options.fontItalic = args[++i];
             } else if (args[i] === '--font-size' && args[i + 1]) {
                 options.fontSize = parseInt(args[++i], 10);
+            } else if (args[i] === '--adapter-view') {
+                // Validate like Python's argparse choices: a typo must not silently
+                // fall back to the plug view and render the wrong port directions.
+                const view = args[i + 1];
+                if (view !== 'plug' && view !== 'socket') {
+                    console.error(view === undefined
+                        ? 'Error: --adapter-view requires a value (plug or socket)'
+                        : `Error: invalid --adapter-view '${view}' (choose plug or socket)`);
+                    process.exit(2);
+                }
+                options.adapterView = view;
+                i++;
             }
         }
 
