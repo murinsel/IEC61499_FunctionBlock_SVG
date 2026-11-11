@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FBType Name="ParamLabelAtLeftEdge" Comment="Parameter value labels at the left edge and an instance name wider than its block at the right edge of a network wider than the minimum network width">
+	<InterfaceList>
+	</InterfaceList>
+	<FBNetwork>
+		<FB Name="Q" Type="DigitalInput" x="0" y="0">
+			<Parameter Name="QI" Value="TRUE"/>
+			<Parameter Name="PARAMS" Value="'DigitalInput_Key_2'"/>
+		</FB>
+		<FB Name="AnInstanceNameMuchWiderThanItsBlock" Type="DigitalOutput" x="24000" y="0">
+		</FB>
+		<EventConnections>
+			<Connection Source="Q.IND" Destination="AnInstanceNameMuchWiderThanItsBlock.REQ"/>
+		</EventConnections>
+	</FBNetwork>
+</FBType>

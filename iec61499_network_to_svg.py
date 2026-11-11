@@ -1480,7 +1480,7 @@ class NetworkLayoutEngine:
 
         label_above = self.INSTANCE_LABEL_HEIGHT + 4  # label height + padding above label
         for inst in model.instances:
-            all_x.extend([inst.render_x, inst.render_x + inst.block_width])
+            all_x.extend(self._instance_x_extent(inst))
             all_y.extend([inst.render_y - label_above, inst.render_y + inst.block_height])
 
         if model.input_sidebar_rect:
@@ -1582,6 +1582,25 @@ class NetworkLayoutEngine:
             port.render_y = header_bottom + label_top_pad + i * sidebar_row_h
 
 
+    def _instance_x_extent(self, inst: FBInstance) -> Tuple[float, float]:
+        """Horizontal extent (left, right) of an instance including what is
+        drawn outside the block body: the centered instance name (may be
+        wider than the block) and the parameter value labels drawn
+        right-aligned to the left of the input pins."""
+        name_overhang = (inst.figure_width - inst.block_width) / 2
+        left = inst.render_x - name_overhang
+        right = inst.render_x + inst.block_width + name_overhang
+        input_types: Dict[str, str] = {p.name: "Event" for p in inst.event_inputs}
+        input_types.update({p.name: p.port_type for p in inst.data_inputs})
+        for param_name, param_value in inst.parameters.items():
+            if param_name.startswith("__") or param_name not in input_types or not param_value:
+                continue
+            display_value = _format_parameter_value(param_value, input_types[param_name])
+            display_value = _truncate_label(display_value, self.settings.max_value_label_size)
+            # Matches _render_parameter_labels: text-anchor="end" at x=-3
+            left = min(left, inst.render_x - 3 - self._measure_text(display_value))
+        return left, right
+
     def get_diagram_bounds(self, model: NetworkModel) -> Tuple[float, float, float, float]:
         """Get the bounding box of the entire diagram (min_x, min_y, max_x, max_y)."""
         all_x = []
@@ -1593,7 +1612,7 @@ class NetworkLayoutEngine:
             return bx, by, bx + bw, by + bh
 
         for inst in model.instances:
-            all_x.extend([inst.render_x, inst.render_x + inst.block_width])
+            all_x.extend(self._instance_x_extent(inst))
             all_y.extend([inst.render_y - self.INSTANCE_LABEL_HEIGHT - 4, inst.render_y + inst.block_height])  # label above
 
         # Include sidebar rectangles in bounds

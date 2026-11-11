@@ -1141,7 +1141,7 @@ class NetworkLayoutEngine {
 
         const labelAbove = this.INSTANCE_LABEL_HEIGHT + 4; // label height + padding
         for (const inst of model.instances) {
-            allX.push(inst.renderX, inst.renderX + inst.blockWidth);
+            allX.push(...this._instanceXExtent(inst));
             allY.push(inst.renderY - labelAbove, inst.renderY + inst.blockHeight);
         }
 
@@ -1249,6 +1249,27 @@ class NetworkLayoutEngine {
         });
     }
 
+    // Horizontal extent [left, right] of an instance including what is
+    // drawn outside the block body: the centered instance name (may be
+    // wider than the block) and the parameter value labels drawn
+    // right-aligned to the left of the input pins.
+    _instanceXExtent(inst) {
+        const nameOverhang = (inst.figureWidth - inst.blockWidth) / 2;
+        let left = inst.renderX - nameOverhang;
+        const right = inst.renderX + inst.blockWidth + nameOverhang;
+        const inputTypes = {};
+        for (const p of inst.eventInputs) inputTypes[p.name] = "Event";
+        for (const p of inst.dataInputs) inputTypes[p.name] = p.portType;
+        for (const [paramName, paramValue] of Object.entries(inst.parameters || {})) {
+            if (paramName.startsWith("__") || !(paramName in inputTypes) || !paramValue) continue;
+            let displayValue = _formatParameterValue(paramValue, inputTypes[paramName]);
+            displayValue = _truncateLabel(displayValue, this.settings.maxValueLabelSize);
+            // Matches _renderParameterLabels: text-anchor="end" at x=-3
+            left = Math.min(left, inst.renderX - 3 - this._measureText(displayValue));
+        }
+        return [left, right];
+    }
+
     getDiagramBounds(model) {
         // Use outer border if available (it encompasses everything)
         if (model.outerBorderRect) {
@@ -1260,7 +1281,7 @@ class NetworkLayoutEngine {
         const allY = [];
 
         for (const inst of model.instances) {
-            allX.push(inst.renderX, inst.renderX + inst.blockWidth);
+            allX.push(...this._instanceXExtent(inst));
             allY.push(inst.renderY - 20, inst.renderY + inst.blockHeight);
         }
 
